@@ -4,8 +4,15 @@ import org.springframework.boot.SpringApplication;
 
 public class TestMsConductoresApplication {
 
-	public static void main(String[] args) {
-		SpringApplication.from(MsConductoresApplication::main).with(TestcontainersConfiguration.class).run(args);
-	}
+    /**
+     * Arranca la aplicación con los contenedores de prueba.
+     *
+     * @param args argumentos de línea de comandos
+     */
+    public static void main(String[] args) {
+        SpringApplication.from(MsConductoresApplication::main)
+            .with(TestcontainersConfiguration.class)
+            .run(args);
+    }
 
 }
