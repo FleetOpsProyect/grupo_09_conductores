@@ -1,0 +1,146 @@
+plugins {
+	id 'java'
+	id 'jacoco'
+	id 'checkstyle'
+	id 'org.springframework.boot' version '4.1.1'
+	id 'io.spring.dependency-management' version '1.1.7'
+	id 'org.sonarqube' version '7.3.0.8198'
+}
+
+group = 'co.edu.univalle'
+version = '1.0.0-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+configurations {
+	compileOnly {
+		extendsFrom annotationProcessor
+	}
+}
+
+dependencies {
+	// Spring Boot (generadas por Initializr)
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-amqp'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+	// Swagger / OpenAPI — Spring Boot 4
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
+
+	// Persistencia: Firebase Firestore (reemplaza JPA, Flyway y PostgreSQL)
+	implementation 'com.google.firebase:firebase-admin:9.8.0'
+
+	// Resilience4j (Circuit Breaker) y springdoc-openapi (Swagger)
+    implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
+
+	// Lombok
+	compileOnly 'org.projectlombok:lombok'
+	annotationProcessor 'org.projectlombok:lombok'
+
+	// DevTools
+	developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+	// Testing
+	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-amqp-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	testImplementation 'org.testcontainers:testcontainers-rabbitmq'
+	testCompileOnly 'org.projectlombok:lombok'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testAnnotationProcessor 'org.projectlombok:lombok'
+}
+
+// ── JaCoCo ──────────────────────────────────────────────────────────────
+
+jacoco {
+	toolVersion = '0.8.12'
+}
+
+jacocoTestReport {
+	dependsOn test
+	reports {
+		xml.required.set(true)
+		html.required.set(true)
+		html.outputLocation.set(layout.buildDirectory.dir('jacocoHtml'))
+	}
+	afterEvaluate {
+		classDirectories.setFrom(files(classDirectories.files.collect {
+			fileTree(dir: it, exclude: [
+				'co/edu/univalle/conductores/config/**',
+				'co/edu/univalle/conductores/**/dto/**',
+				'co/edu/univalle/conductores/MsConductoresApplication.class'
+			])
+		}))
+	}
+}
+
+jacocoTestCoverageVerification {
+	dependsOn jacocoTestReport
+	afterEvaluate {
+		classDirectories.setFrom(files(classDirectories.files.collect {
+			fileTree(dir: it, exclude: [
+				'co/edu/univalle/conductores/config/**',
+				'co/edu/univalle/conductores/**/dto/**',
+				'co/edu/univalle/conductores/MsConductoresApplication.class'
+			])
+		}))
+	}
+	violationRules {
+		rule {
+			limit {
+				minimum = 0.80
+			}
+		}
+	}
+}
+
+// ── Checkstyle (checkstyle.xml se crea en el Paso 4 de la guía) ─────────
+
+checkstyle {
+	toolVersion = '10.21.4'
+	configFile = file('checkstyle.xml')
+	ignoreFailures = false
+	showViolations = true
+}
+
+// ── SonarCloud ──────────────────────────────────────────────────────────
+
+sonar {
+	properties {
+		property 'sonar.projectKey', 'TU-USUARIO_ms-conductores'
+		property 'sonar.organization', 'TU-USUARIO'
+		property 'sonar.host.url', 'https://sonarcloud.io'
+		property 'sonar.coverage.jacoco.xmlReportPaths',
+				 'build/reports/jacoco/test/jacocoTestReport.xml'
+		property 'sonar.coverage.exclusions',
+				 'co/edu/univalle/conductores/config/**,' +
+				 'co/edu/univalle/conductores/**/dto/**,' +
+				 'co/edu/univalle/conductores/MsConductoresApplication.java'
+		property 'sonar.java.source', '21'
+	}
+}
+
+// ── Orden de tareas ─────────────────────────────────────────────────────
+
+tasks.named('test') {
+	useJUnitPlatform()
+	finalizedBy jacocoTestReport
+}
+
+check {
+	dependsOn jacocoTestCoverageVerification
+}

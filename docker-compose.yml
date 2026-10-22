@@ -1,0 +1,19 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: conductores_rabbitmq
+    ports:
+      - "5650:5672"     # AMQP
+      - "15650:15672"   # Consola de administración
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  firestore-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    container_name: conductores_firestore
+    command: ["gcloud", "beta", "emulators", "firestore", "start", "--host-port=0.0.0.0:8080"]
+    ports:
+      - "8180:8080"
