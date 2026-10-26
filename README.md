@@ -154,4 +154,4 @@ verificación de cobertura.
 - Un UUID mal formado responde `400`; en la documentación lo proponemos como `404`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
 - No hay logs estructurados JSON, pipeline CI/CD ni dashboards de Grafana por ahora.
-- La documentación OpenAPI de la fase 2 no está incluida.
+- La especificación OpenAPI no indica que los roles y la regla “solo el propio conductor” (HU-03) son de fase 2; en el MVP cualquier token válido tiene acceso completo (TEC_02).
