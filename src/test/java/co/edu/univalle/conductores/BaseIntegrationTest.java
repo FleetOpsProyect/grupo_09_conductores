@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores;
 
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -14,6 +15,7 @@ import org.testcontainers.utility.DockerImageName;
  */
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureMetrics
 public abstract class BaseIntegrationTest {
 
     private static final int FIRESTORE_PORT = 8080;

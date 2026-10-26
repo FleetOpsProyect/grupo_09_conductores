@@ -29,8 +29,14 @@ springdoc:
 management:
   endpoints:
     web:
+      base-path: /
+      path-mapping:
+        prometheus: metrics
       exposure:
-        include: health, info, prometheus
+        include: health,info,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: never
+  health:
+    rabbit:
+      enabled: false
