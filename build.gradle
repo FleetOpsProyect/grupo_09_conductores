@@ -105,6 +105,23 @@ jacocoTestCoverageVerification {
 				minimum = 0.80
 			}
 		}
+		rule {
+			element = 'CLASS'
+			includes = [
+				'co.edu.univalle.conductores.domain.*',
+				'co.edu.univalle.conductores.application.service.*'
+			]
+			limit {
+				counter = 'LINE'
+				value = 'COVEREDRATIO'
+				minimum = 1.0
+			}
+			limit {
+				counter = 'BRANCH'
+				value = 'COVEREDRATIO'
+				minimum = 1.0
+			}
+		}
 	}
 }
 
