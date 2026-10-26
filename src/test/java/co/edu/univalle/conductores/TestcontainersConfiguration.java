@@ -12,7 +12,7 @@ class TestcontainersConfiguration {
     @Bean
     @ServiceConnection
     RabbitMQContainer rabbitContainer() {
-        return new RabbitMQContainer(DockerImageName.parse("rabbitmq:3-management"));
+        return new RabbitMQContainer(DockerImageName.parse("rabbitmq:4.4.0-management"));
     }
 
 }

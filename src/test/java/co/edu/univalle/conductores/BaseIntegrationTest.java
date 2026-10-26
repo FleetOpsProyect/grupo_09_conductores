@@ -19,7 +19,7 @@ public abstract class BaseIntegrationTest {
     private static final int FIRESTORE_PORT = 8080;
 
     static final GenericContainer<?> FIRESTORE_EMULATOR = new GenericContainer<>(
-            DockerImageName.parse("gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators"))
+            DockerImageName.parse("gcr.io/google.com/cloudsdktool/google-cloud-cli:590.0.1-emulators"))
             .withCommand("gcloud", "beta", "emulators", "firestore", "start",
                     "--host-port=0.0.0.0:" + FIRESTORE_PORT)
             .withExposedPorts(FIRESTORE_PORT)
