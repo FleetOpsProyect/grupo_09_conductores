@@ -125,12 +125,23 @@ falla.
 ## Pruebas y calidad
 
 ```bash
+# Pruebas unitarias, sin Docker
+./gradlew test --tests 'co.edu.univalle.conductores.domain.*' \
+  --tests 'co.edu.univalle.conductores.application.service.*'
+
+# Suite completa, requiere Docker
 ./gradlew test
+
+# Todas las verificaciones del build
 ./gradlew build
+
+# Reporte de cobertura
+./gradlew jacocoTestReport
 ```
 
-`test` usa Testcontainers y requiere Docker. `build` ejecuta pruebas, Checkstyle, JaCoCo y la
-verificación de cobertura.
+La suite completa usa Testcontainers y requiere Docker. `build` ejecuta pruebas, Checkstyle, JaCoCo
+y la verificación de cobertura. El reporte de cobertura se genera en
+`build/jacocoHtml/index.html` (HTML) y `build/reports/jacoco/test/jacocoTestReport.xml` (XML).
 
 ## Limitaciones conocidas a corregir/implementar en futuro cercano
 
