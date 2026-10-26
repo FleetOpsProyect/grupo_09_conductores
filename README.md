@@ -1,0 +1,157 @@
+# ms-conductores
+
+Microservicio REST para la gestión de conductores de FleetOps (Grupo 09). Expone el CRUD de
+conductores, persiste en Firestore, publica salud y métricas para Prometheus y documenta la API
+con OpenAPI.
+
+## Stack
+
+- Java 21 y Spring Boot 4.1.1, construido con el Gradle Wrapper 9.8.2.
+- Firebase Admin 9.8.0 para Firestore.
+- Spring Boot Actuator y Micrometer con registro Prometheus.
+- springdoc-openapi 3.1.1 para Swagger UI.
+- JUnit Jupiter, Mockito y Testcontainers.
+- RabbitMQ opcional para desarrollo local.
+
+## Requisitos
+
+- JDK 21.
+- Docker y Docker Compose.
+- Copiar `.env.example` a `.env` antes de ejecutar el servicio.
+
+## Configuración
+
+El archivo `.env` no se versiona. En ejecución local Spring lo importa automáticamente; en Docker
+Compose las variables llegan al contenedor mediante `env_file`.
+
+| Variable | Local (`bootRun`) | Docker Compose | Descripción |
+| :--- | :--- | :--- | :--- |
+| `SERVER_PORT` | `8085` | `8085` | Puerto HTTP. La imagen usa `8085` por defecto y permite sobrescribirlo. |
+| `FIREBASE_PROJECT_ID` | `demo-conductores` | `demo-conductores` | Proyecto de Firebase/Firestore. |
+| `FIREBASE_EMULATOR_HOST` | `localhost:8180` | `firestore-emulator:8080` | Emulador local. En producción debe quedar vacío. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | — | Ruta al JSON de la cuenta de servicio en producción. No se versiona. |
+| `SPRING_RABBITMQ_HOST` | `localhost` | `rabbitmq` | Broker local; en Compose solo se usa con el perfil `broker`. |
+| `SPRING_RABBITMQ_PORT` | `5650` | `5672` | Puerto AMQP expuesto en el host y puerto interno del contenedor. |
+| `SPRING_RABBITMQ_USERNAME` | `guest` | `guest` | Usuario de RabbitMQ. |
+| `SPRING_RABBITMQ_PASSWORD` | `guest` | `guest` | Contraseña de RabbitMQ. |
+| `JAVA_OPTS` | — | `-Xms256m -Xmx512m` | Opciones de la JVM en la imagen Docker; se pueden sobrescribir. |
+
+`GOOGLE_APPLICATION_CREDENTIALS` debe definirse como variable de entorno real del contenedor o del
+host; no debe agregarse a `.env`, porque ese archivo se importa como propiedades de Spring y no
+exporta variables al proceso.
+
+La integración con Documentación todavía no está implementada. Los valores previstos en el DAS
+son: URL del servicio, timeout de 2 s, 5 fallos consecutivos para abrir el Circuit Breaker y 30 s
+de espera con el circuito abierto.
+
+## Ejecución local
+
+```bash
+cp .env.example .env
+docker compose up -d firestore-emulator
+./gradlew bootRun
+```
+
+El servicio queda en `http://localhost:8085` y el emulador de Firestore en
+`http://localhost:8180`. No levantes el servicio `backend` de Compose al mismo tiempo, porque
+también ocupa el puerto `8085`.
+
+## Ejecución con Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Compose levanta el emulador de Firestore y el servicio `backend`. El backend espera a que Firestore
+esté saludable y sobrescribe `FIREBASE_EMULATOR_HOST` con `firestore-emulator:8080`.
+
+Para incluir RabbitMQ, activa el perfil `broker`:
+
+```bash
+docker compose --profile broker up --build
+```
+
+La consola de RabbitMQ queda en `http://localhost:15650` y el puerto AMQP en `localhost:5650`.
+Para detener todo, incluido el perfil `broker`:
+
+```bash
+docker compose --profile broker down
+```
+
+## Endpoints
+
+| Método | Ruta | Descripción |
+| :--- | :--- | :--- |
+| `POST` | `/drivers` | Registra un conductor. Responde `201`, `400` o `409`. |
+| `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200`, `400` o `404`. |
+| `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). |
+| `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400` o `404`. |
+| `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
+| `GET` | `/metrics` | Métricas en formato Prometheus. |
+| `GET` | `/info` | Información del servicio. |
+| `GET` | `/v3/api-docs` | Especificación OpenAPI en JSON, con propiedades en snake_case. |
+| `GET` | `/swagger-ui.html` | Interfaz Swagger UI. |
+
+Ejemplo de registro:
+
+```bash
+curl -X POST http://localhost:8085/drivers \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "full_name": "Carlos Pérez",
+    "document_number": "1234567890",
+    "email": "carlos@correo.com",
+    "phone": "3001234567"
+  }'
+```
+
+Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/info`, no
+`/actuator/*`.
+
+## Firestore
+
+`firestore.indexes.json` versiona el índice compuesto de la colección `drivers`:
+
+- `status` ascendente.
+- `created_at` ascendente.
+
+Este índice cubre el listado con filtro por estado y orden por fecha de creación.
+
+El emulador no exige este índice, pero Firestore real sí. Despliégalo con
+`firebase deploy --only firestore:indexes`; de lo contrario, el listado filtrado por `status`
+falla.
+
+## Pruebas y calidad
+
+```bash
+./gradlew test
+./gradlew build
+```
+
+`test` usa Testcontainers y requiere Docker. `build` ejecuta pruebas, Checkstyle, JaCoCo y la
+verificación de cobertura.
+
+## Limitaciones conocidas a corregir/implementar en futuro cercano
+
+- La API responde `201 Created`, pero la especificación OpenAPI aún publica `200`; alinear el
+  contrato es trabajo de TEC_02.
+- El título de la API sigue siendo el valor por defecto `OpenAPI definition`; el título definitivo
+  es trabajo de TEC_02.
+- No están implementados la integración con Documentación ni el Circuit Breaker: URL del servicio,
+  timeout de 2 s, 5 fallos consecutivos y 30 s con el circuito abierto.
+- No están implementados los eventos, la DLQ, `processed_events` ni la publicación/consumo en
+  RabbitMQ. El broker solo se levanta con el perfil `broker`.
+- Faltan el listado de elegibles, el alta médica y el borrado lógico.
+- Los errores de validación usan códigos y estructura parcialmente distintos a los propuestos en el documento de historias de usuario que tenemos como grupo
+  (`errors[].message` en lugar de `errors[].code`).
+- Cuando Firestore no está disponible, la API responde `500`; en la documentación planteamos
+  `503 SERVICE_UNAVAILABLE`.
+- Las rutas desconocidas (por ejemplo, `/drivres`) devuelven el cuerpo de error por defecto de
+  Spring en lugar del formato común de error (TEC_04). Se puede añadir un formato de error adicional al catalogo en la documentación.
+- `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda
+  `created_at`.
+- Un UUID mal formado responde `400`; en la documentación lo proponemos como `404`.
+- Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
+- No hay logs estructurados JSON, pipeline CI/CD ni dashboards de Grafana por ahora.
+- La documentación OpenAPI de la fase 2 no está incluida.
