@@ -41,10 +41,47 @@ class DriverTest {
     }
 
     @Test
+    void registerRejectsNullDocumentNumber() {
+        assertThatThrownBy(() -> Driver.register("Carlos Pérez", null, "carlos@correo.com", null, NOW))
+                .isInstanceOf(InvalidDriverException.class)
+                .hasMessageContaining("document_number");
+    }
+
+    @Test
+    void registerRejectsNullName() {
+        assertThatThrownBy(() -> Driver.register(null, "1144056789", "carlos@correo.com", null, NOW))
+                .isInstanceOf(InvalidDriverException.class)
+                .hasMessageContaining("full_name");
+    }
+
+    @Test
     void registerRejectsNameShorterThanThreeCharacters() {
         assertThatThrownBy(() -> Driver.register("Al", "1144056789", "carlos@correo.com", null, NOW))
                 .isInstanceOf(InvalidDriverException.class)
                 .hasMessageContaining("full_name");
+    }
+
+    @Test
+    void registerRejectsNameLongerThanOneHundredCharacters() {
+        assertThatThrownBy(
+                () -> Driver.register("A".repeat(101), "1144056789", "carlos@correo.com", null, NOW))
+                .isInstanceOf(InvalidDriverException.class)
+                .hasMessageContaining("full_name");
+    }
+
+    @Test
+    void registerRejectsNullEmail() {
+        assertThatThrownBy(() -> Driver.register("Carlos Pérez", "1144056789", null, null, NOW))
+                .isInstanceOf(InvalidDriverException.class)
+                .hasMessageContaining("email");
+    }
+
+    @Test
+    void registerRejectsEmailLongerThanOneHundredCharacters() {
+        assertThatThrownBy(() -> Driver.register("Carlos Pérez", "1144056789",
+                "a".repeat(101) + "@correo.com", null, NOW))
+                .isInstanceOf(InvalidDriverException.class)
+                .hasMessageContaining("email");
     }
 
     @Test
