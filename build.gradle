@@ -40,9 +40,8 @@ dependencies {
 	// Persistencia: Firebase Firestore (reemplaza JPA, Flyway y PostgreSQL)
 	implementation 'com.google.firebase:firebase-admin:9.8.0'
 
-	// Resilience4j (Circuit Breaker) y springdoc-openapi (Swagger)
+	// Resilience4j (Circuit Breaker)
     implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
 
 	// Lombok
 	compileOnly 'org.projectlombok:lombok'
