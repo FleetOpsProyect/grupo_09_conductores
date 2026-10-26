@@ -122,7 +122,7 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
     private RestClient client() {
         return RestClient.builder()
-                .baseUrl("http://localhost:" + port + "/ms-conductores/drivers")
+                .baseUrl("http://localhost:" + port + "/drivers")
                 .defaultStatusHandler(status -> true, (request, response) -> { })
                 .build();
     }
