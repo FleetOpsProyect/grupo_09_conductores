@@ -1,13 +1,23 @@
 spring:
-  jackson:
-    property-naming-strategy: SNAKE_CASE
-  profiles:
-    active: dev
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: ms-conductores
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
 
 server:
-  port: 8085
+  port: ${SERVER_PORT}
+
+app:
+  firebase:
+    project-id: ${FIREBASE_PROJECT_ID}
+    emulator-host: ${FIREBASE_EMULATOR_HOST:}
 
 springdoc:
   api-docs:
