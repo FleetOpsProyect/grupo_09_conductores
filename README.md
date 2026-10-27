@@ -11,7 +11,7 @@ con OpenAPI.
 - Spring Boot Actuator y Micrometer con registro Prometheus.
 - springdoc-openapi 3.1.1 para Swagger UI.
 - JUnit Jupiter, Mockito y Testcontainers.
-- RabbitMQ opcional para desarrollo local.
+- AWS SNS + SQS con Spring Cloud AWS 4.1.1; LocalStack en local.
 
 ## Requisitos
 
@@ -24,37 +24,51 @@ con OpenAPI.
 El archivo `.env` no se versiona. En ejecución local Spring lo importa automáticamente; en Docker
 Compose las variables llegan al contenedor mediante `env_file`.
 
-| Variable | Local (`bootRun`) | Docker Compose | Descripción |
+### Variables de entorno
+
+| Variable | Descripción | Valor por defecto | Estado |
 | :--- | :--- | :--- | :--- |
-| `SERVER_PORT` | `8085` | `8085` | Puerto HTTP. La imagen usa `8085` por defecto y permite sobrescribirlo. |
-| `FIREBASE_PROJECT_ID` | `demo-conductores` | `demo-conductores` | Proyecto de Firebase/Firestore. |
-| `FIREBASE_EMULATOR_HOST` | `localhost:8180` | `firestore-emulator:8080` | Emulador local. En producción debe quedar vacío. |
-| `GOOGLE_APPLICATION_CREDENTIALS` | — | — | Ruta al JSON de la cuenta de servicio en producción. No se versiona. |
-| `SPRING_RABBITMQ_HOST` | `localhost` | `rabbitmq` | Broker local; en Compose solo se usa con el perfil `broker`. |
-| `SPRING_RABBITMQ_PORT` | `5650` | `5672` | Puerto AMQP expuesto en el host y puerto interno del contenedor. |
-| `SPRING_RABBITMQ_USERNAME` | `guest` | `guest` | Usuario de RabbitMQ. |
-| `SPRING_RABBITMQ_PASSWORD` | `guest` | `guest` | Contraseña de RabbitMQ. |
-| `JAVA_OPTS` | — | `-Xms256m -Xmx512m` | Opciones de la JVM en la imagen Docker; se pueden sobrescribir. |
+| `SERVER_PORT` | Puerto HTTP del servicio. | `8085` | Implementada |
+| `FIREBASE_PROJECT_ID` | Proyecto de Firebase/Firestore. | `demo-conductores` (local) | Implementada |
+| `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. Vacío en producción. | vacío | Implementada |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Ruta al JSON de la cuenta de servicio. En producción apunta a `/secrets/firebase-adminsdk.json` dentro del contenedor. | — | Implementada (SDK) |
+| `AWS_REGION` | Región de AWS para SNS/SQS. | `us-east-1` | Implementada |
+| `AWS_ACCESS_KEY_ID` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Implementada |
+| `AWS_SECRET_ACCESS_KEY` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Implementada |
+| `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Implementada |
+| `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor (por ejemplo `-XX:MaxRAMPercentage=75.0`). | `-XX:MaxRAMPercentage=75.0` | Implementada |
+| `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | — | Prevista |
+| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | — | Prevista |
+| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | — | Prevista |
+| `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | Prevista |
+| `DOCUMENTACION_URL` | URL del servicio de Documentación. | — | Prevista |
+| `DOCUMENTACION_TIMEOUT_MS` | Timeout hacia Documentación. | `2000` (2 s) | Prevista |
+| `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES` | Fallos consecutivos para abrir el Circuit Breaker. | `5` | Prevista |
+| `CIRCUIT_BREAKER_WAIT_DURATION_MS` | Espera con el circuito abierto. | `30000` (30 s) | Prevista |
+| `FIREBASE_CREDENTIALS_PATH` | Ruta en el host (EC2) al JSON de Firebase que se monta como volumen. | `./credentials/firebase-adminsdk.json` | Infra |
+| `DOCKERHUB_USER` | Usuario de Docker Hub (secreto `DOCKERHUB_USERNAME` en CI/CD). | — | Infra |
+| `IMAGE_NAME` | Nombre de la imagen Docker. | `ms-conductores` | Infra |
+| `IMAGE_TAG` | Etiqueta de la imagen (SHA corto del commit en CD; `latest` solo en main). | `latest` | Infra |
 
-`GOOGLE_APPLICATION_CREDENTIALS` debe definirse como variable de entorno real del contenedor o del
-host; no debe agregarse a `.env`, porque ese archivo se importa como propiedades de Spring y no
-exporta variables al proceso.
+Las variables marcadas como *Prevista* documentan valores que el código todavía no lee: la
+integración con Documentación, el Circuit Breaker y el outbox de eventos están pendientes de
+implementar. Ninguno de estos valores está escrito a mano en el código.
 
-La integración con Documentación todavía no está implementada. Los valores previstos en el DAS
-son: URL del servicio, timeout de 2 s, 5 fallos consecutivos para abrir el Circuit Breaker y 30 s
-de espera con el circuito abierto.
+En producción `GOOGLE_APPLICATION_CREDENTIALS` apunta a `/secrets/firebase-adminsdk.json` (dentro
+del contenedor) y el archivo se monta como volumen de solo lectura (ver
+`docker-compose.prod.yml`).
 
 ## Ejecución local
 
 ```bash
 cp .env.example .env
-docker compose up -d firestore-emulator
+docker compose up -d firestore-emulator localstack
 ./gradlew bootRun
 ```
 
-El servicio queda en `http://localhost:8085` y el emulador de Firestore en
-`http://localhost:8180`. No levantes el servicio `backend` de Compose al mismo tiempo, porque
-también ocupa el puerto `8085`.
+El servicio queda en `http://localhost:8085`, el emulador de Firestore en `http://localhost:8180`
+y LocalStack en `http://localhost:4566`. No levantes el servicio `backend` de Compose al mismo
+tiempo, porque también ocupa el puerto `8085`.
 
 ## Ejecución con Docker Compose
 
@@ -63,20 +77,24 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose levanta el emulador de Firestore y el servicio `backend`. El backend espera a que Firestore
-esté saludable y sobrescribe `FIREBASE_EMULATOR_HOST` con `firestore-emulator:8080`.
+Compose levanta el emulador de Firestore, LocalStack (SNS + SQS) y el servicio `backend`. El
+backend espera a que Firestore y LocalStack estén saludables, y sobrescribe
+`FIREBASE_EMULATOR_HOST` con `firestore-emulator:8080` y `SPRING_CLOUD_AWS_ENDPOINT` con
+`http://localstack:4566`.
 
-Para incluir RabbitMQ, activa el perfil `broker`:
+`scripts/init-localstack.sh` crea de forma idempotente:
+
+- el topic `fleetops_driver_events`;
+- la cola `fleetops_driver_queue` con la DLQ `fleetops_driver_dlq` (redrive con
+  `maxReceiveCount=3`);
+- los topics `fleetops_document_events` y `fleetops_incident_events`;
+- las suscripciones de `fleetops_driver_queue` a esos topics, con filter policy por `event_type`
+  y raw message delivery.
+
+Para detener todo:
 
 ```bash
-docker compose --profile broker up --build
-```
-
-La consola de RabbitMQ queda en `http://localhost:15650` y el puerto AMQP en `localhost:5650`.
-Para detener todo, incluido el perfil `broker`:
-
-```bash
-docker compose --profile broker down
+docker compose down
 ```
 
 ## Endpoints
@@ -122,6 +140,54 @@ El emulador no exige este índice, pero Firestore real sí. Despliégalo con
 `firebase deploy --only firestore:indexes`; de lo contrario, el listado filtrado por `status`
 falla.
 
+## Producción (EC2)
+
+La composición `docker-compose.prod.yml` usa la imagen publicada en Docker Hub (sin `build:`). En
+la EC2:
+
+```bash
+cp .env.prod.example .env
+# Completa .env con los valores reales (los secretos nunca se versionan).
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Requisitos de la EC2 (paso 11, fuera de este repositorio):
+
+- Un rol IAM que permita publicar en `fleetops_driver_events` y consumir
+  `fleetops_driver_queue` y `fleetops_driver_dlq`. No se montan llaves de AWS: el SDK usa el
+  perfil de instancia.
+- El JSON de la cuenta de servicio de Firebase ubicado en la ruta indicada por
+  `FIREBASE_CREDENTIALS_PATH`; se monta como volumen de solo lectura en
+  `/secrets/firebase-adminsdk.json`.
+
+## Publicación en Docker Hub
+
+Publicación manual (los pasos 13/14 la automatizan en GitHub Actions). Sustituye `<usuario>` por
+el usuario de Docker Hub:
+
+```bash
+export DOCKERHUB_USER=<usuario>
+export IMAGE_NAME=ms-conductores
+export IMAGE_TAG=$(git rev-parse --short=7 HEAD)
+
+docker login -u "$DOCKERHUB_USER"
+
+# La EC2 es x86_64. Si compilas desde Apple Silicon, añade --platform linux/amd64.
+docker buildx build --platform linux/amd64 \
+  -t "$DOCKERHUB_USER/$IMAGE_NAME:$IMAGE_TAG" \
+  --push .
+
+# La etiqueta latest solo se publica desde main.
+if [ "$(git branch --show-current)" = "main" ]; then
+  docker buildx build --platform linux/amd64 \
+    -t "$DOCKERHUB_USER/$IMAGE_NAME:latest" \
+    --push .
+fi
+```
+
+Secretos que deben existir para los workflows (pasos 13/14): `DOCKERHUB_USERNAME` y
+`DOCKERHUB_TOKEN`.
+
 ## Pruebas y calidad
 
 ```bash
@@ -151,8 +217,9 @@ y la verificación de cobertura. El reporte de cobertura se genera en
   es trabajo de TEC_02.
 - No están implementados la integración con Documentación ni el Circuit Breaker: URL del servicio,
   timeout de 2 s, 5 fallos consecutivos y 30 s con el circuito abierto.
-- No están implementados los eventos, la DLQ, `processed_events` ni la publicación/consumo en
-  RabbitMQ. El broker solo se levanta con el perfil `broker`.
+- No están implementados aún el outbox, la publicación/consumo de eventos, `processed_events` ni
+  la DLQ. La infraestructura SNS/SQS queda lista (LocalStack en local, recursos de AWS en
+  producción); el código productor/consumidor es trabajo pendiente.
 - Faltan el listado de elegibles, el alta médica y el borrado lógico.
 - Los errores de validación usan códigos y estructura parcialmente distintos a los propuestos en el documento de historias de usuario que tenemos como grupo
   (`errors[].message` en lugar de `errors[].code`).
@@ -164,5 +231,5 @@ y la verificación de cobertura. El reporte de cobertura se genera en
   `created_at`.
 - Un UUID mal formado responde `400`; en la documentación lo proponemos como `404`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- No hay logs estructurados JSON, pipeline CI/CD ni dashboards de Grafana por ahora.
+- No hay logs estructurados JSON ni dashboards de Grafana por ahora.
 - La especificación OpenAPI no indica que los roles y la regla “solo el propio conductor” (HU-03) son de fase 2; en el MVP cualquier token válido tiene acceso completo (TEC_02).
