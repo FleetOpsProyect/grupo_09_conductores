@@ -1,0 +1,31 @@
+# Composición de producción para la EC2.
+#
+# Decisiones de seguridad:
+# - Sin LocalStack, sin emulador de Firestore y sin llaves de AWS en el repo.
+# - El acceso a SNS/SQS se resuelve con el rol IAM de la instancia EC2: el SDK usa
+#   la cadena de credenciales por defecto (perfil de instancia), por lo que aquí no
+#   se monta ningún archivo de credenciales de AWS.
+# - El JSON de la cuenta de servicio de Firebase se monta como volumen de solo lectura
+#   y la variable GOOGLE_APPLICATION_CREDENTIALS apunta a la ruta DENTRO del contenedor.
+
+services:
+  backend:
+    image: ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${SERVER_PORT:-8085}:8085"
+    volumes:
+      - "${FIREBASE_CREDENTIALS_PATH:-./credentials/firebase-adminsdk.json}:/secrets/firebase-adminsdk.json:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/health > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
