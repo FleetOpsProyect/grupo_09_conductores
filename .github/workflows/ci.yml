@@ -65,7 +65,7 @@ jobs:
           retention-days: 7
 
       - name: Qodo — revisión automática del PR
-        uses: Codium-ai/pr-agent@main
+        uses: Codium-ai/pr-agent@5eaa1265a608f3274fc207e45119ee424279c38c # main
         if: github.event_name == 'pull_request'
         continue-on-error: true
         env:
