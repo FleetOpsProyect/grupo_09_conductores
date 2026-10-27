@@ -65,6 +65,7 @@ jobs:
       - name: Qodo — revisión automática del PR
         uses: Codium-ai/pr-agent@main
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
