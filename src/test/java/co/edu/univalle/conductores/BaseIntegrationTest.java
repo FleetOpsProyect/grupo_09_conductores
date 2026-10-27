@@ -10,8 +10,8 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Clase base para pruebas de integración: levanta el contexto completo de Spring,
- * RabbitMQ (desde {@link TestcontainersConfiguration}) y el emulador de Firestore.
+ * Clase base para pruebas de integración: levanta el contexto completo de Spring
+ * y el emulador de Firestore.
  */
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
