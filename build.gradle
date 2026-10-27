@@ -40,9 +40,8 @@ dependencies {
 	// Persistencia: Firebase Firestore (reemplaza JPA, Flyway y PostgreSQL)
 	implementation 'com.google.firebase:firebase-admin:9.8.0'
 
-	// Resilience4j (Circuit Breaker) y springdoc-openapi (Swagger)
+	// Resilience4j (Circuit Breaker)
     implementation 'io.github.resilience4j:resilience4j-spring-boot4:2.4.0'
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
 
 	// Lombok
 	compileOnly 'org.projectlombok:lombok'
@@ -52,6 +51,7 @@ dependencies {
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 
 	// Testing
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-amqp-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
@@ -105,6 +105,23 @@ jacocoTestCoverageVerification {
 				minimum = 0.80
 			}
 		}
+		rule {
+			element = 'CLASS'
+			includes = [
+				'co.edu.univalle.conductores.domain.*',
+				'co.edu.univalle.conductores.application.service.*'
+			]
+			limit {
+				counter = 'LINE'
+				value = 'COVEREDRATIO'
+				minimum = 1.0
+			}
+			limit {
+				counter = 'BRANCH'
+				value = 'COVEREDRATIO'
+				minimum = 1.0
+			}
+		}
 	}
 }
 
@@ -121,15 +138,15 @@ checkstyle {
 
 sonar {
 	properties {
-		property 'sonar.projectKey', 'TU-USUARIO_ms-conductores'
-		property 'sonar.organization', 'TU-USUARIO'
+		property 'sonar.projectKey', 'FleetOpsProyect_grupo_09_conductores'
+		property 'sonar.organization', 'fleetopsproyect-1'
 		property 'sonar.host.url', 'https://sonarcloud.io'
 		property 'sonar.coverage.jacoco.xmlReportPaths',
 				 'build/reports/jacoco/test/jacocoTestReport.xml'
 		property 'sonar.coverage.exclusions',
-				 'co/edu/univalle/conductores/config/**,' +
-				 'co/edu/univalle/conductores/**/dto/**,' +
-				 'co/edu/univalle/conductores/MsConductoresApplication.java'
+				 '**/co/edu/univalle/conductores/config/**,' +
+				 '**/co/edu/univalle/conductores/**/dto/**,' +
+				 '**/co/edu/univalle/conductores/MsConductoresApplication.java'
 		property 'sonar.java.source', '21'
 	}
 }
