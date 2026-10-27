@@ -1,4 +1,5 @@
 .git
+.github
 .gitignore
 .gradle
 build
@@ -8,12 +9,16 @@ out
 *.iml
 .env
 .env.*
+*.env
 README.md
 docs
-docker-compose.yml
+docker-compose*.yml
 firestore.indexes.json
 credentials/
 *firebase-adminsdk*.json
 serviceAccount*.json
+*.pem
+*.key
+*.sh
 src/main/resources/application-dev.y*
 src/main/resources/application-test.y*
