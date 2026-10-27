@@ -13,7 +13,8 @@ public class Driver {
 
     private static final Pattern DOCUMENT_NUMBER = Pattern.compile("^[0-9]{6,10}$");
     private static final Pattern PHONE = Pattern.compile("^3[0-9]{9}$");
-    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\\.[a-zA-Z]{2,}$");
+    private static final Pattern EMAIL = Pattern.compile(
+            "^[^@\\s]+@[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\\.[a-zA-Z]{2,}$");
     private static final int MAX_EMAIL_LENGTH = 100;
 
     private final UUID id;
