@@ -143,6 +143,52 @@ La suite completa usa Testcontainers y requiere Docker. `build` ejecuta pruebas,
 y la verificación de cobertura. El reporte de cobertura se genera en
 `build/jacocoHtml/index.html` (HTML) y `build/reports/jacoco/test/jacocoTestReport.xml` (XML).
 
+## Convenciones de commits y pull requests
+ 
+### Commits
+ 
+Los mensajes de commit siguen [Conventional Commits](https://www.conventionalcommits.org/) y se
+escriben en inglés, en imperativo y sin punto final:
+ 
+```text
+<tipo>(<alcance opcional>): <descripción corta>
+```
+ 
+Tipos permitidos (los mismos de la plantilla de PR):
+ 
+| Tipo | Cuándo usarlo |
+| :--- | :--- |
+| `feat` | Una nueva característica. |
+| `fix` | Se solucionó un bug. |
+| `docs` | Se realizaron cambios en la documentación. |
+| `style` | Se aplicó formato, comas y puntos faltantes, etc.; sin cambios en el código. |
+| `refactor` | Refactorización del código en producción. |
+| `test` | Se añadieron pruebas o se refactorizaron; sin cambios en el código. |
+| `chore` | Tareas de build, configuración del administrador de paquetes, Docker, Compose o pipeline; sin cambios en el código. |
+ 
+Ejemplos:
+ 
+```text
+feat(HU-01): return 503 when Firestore is unavailable
+fix(HU-02): return 404 for non-UUID driver id
+test: cover phone validation boundaries
+chore: pin Firestore emulator image
+```
+ 
+Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./gradlew build`.
+ 
+### Pull requests
+ 
+- Todo cambio llega a `develop` por pull request; no se hace push directo.
+- **Título:** mismo formato que un commit, con la HU o tarea como alcance, en menos de 70
+  caracteres. Ejemplo: `feat(HU-06): filter drivers by status`.
+- **Descripción:** se llena la plantilla `.github/pull_request_template.md`. Las secciones marcadas
+  con `*` son obligatorias.
+- **Antes de pedir revisión:** el CI debe pasar (Checkstyle, pruebas, cobertura y SonarCloud). La
+  revisión automática de Qodo es una ayuda, no un bloqueo.
+- Si el PR resuelve una limitación de la lista de abajo, se borra de esa lista en el mismo PR.
+ 
+
 ## Limitaciones conocidas a corregir/implementar en futuro cercano
 
 - La API responde `201 Created`, pero la especificación OpenAPI aún publica `200`; alinear el
@@ -164,5 +210,5 @@ y la verificación de cobertura. El reporte de cobertura se genera en
   `created_at`.
 - Un UUID mal formado responde `400`; en la documentación lo proponemos como `404`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- No hay logs estructurados JSON, pipeline CI/CD ni dashboards de Grafana por ahora.
+- No hay logs estructurados JSON, pipeline de CD ni dashboards de Grafana por ahora.
 - La especificación OpenAPI no indica que los roles y la regla “solo el propio conductor” (HU-03) son de fase 2; en el MVP cualquier token válido tiene acceso completo (TEC_02).
