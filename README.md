@@ -97,6 +97,9 @@ Para detener todo:
 docker compose down
 ```
 
+Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag `latest`
+(≥ 2026.03) requiere `LOCALSTACK_AUTH_TOKEN` y no arranca sin él.
+
 ## Endpoints
 
 | Método | Ruta | Descripción |

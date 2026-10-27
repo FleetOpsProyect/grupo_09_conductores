@@ -1,8 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Crea de forma idempotente los recursos SNS/SQS que consume ms-conductores.
 # Se ejecuta en LocalStack desde /etc/localstack/init/ready.d/.
-set -euo pipefail
+# POSIX sh: la imagen Community de LocalStack no incluye bash, sed ni grep.
+set -eu
 
 REGION="${AWS_REGION:-us-east-1}"
 
@@ -22,27 +23,18 @@ queue_arn() {
     --output text --query 'Attributes.QueueArn'
 }
 
-# Escapa las comillas para incrustar una cadena JSON como valor de un atributo.
-escape_json() {
-  printf '%s' "$1" | sed 's/"/\\"/g'
-}
-
 # ── Topic principal de eventos de conductores ───────────────────────────────
 DRIVER_TOPIC_ARN="$(topic_arn fleetops_driver_events)"
 echo "Topic: $DRIVER_TOPIC_ARN"
 
-# ── Cola principal y DLQ ────────────────────────────────────────────────────
+# ── DLQ y cola principal (redrive hacia la DLQ tras 3 intentos fallidos) ────
 DLQ_URL="$(queue_url fleetops_driver_dlq)"
 DLQ_ARN="$(queue_arn "$DLQ_URL")"
 
-DRIVER_QUEUE_URL="$(queue_url fleetops_driver_queue)"
+DRIVER_QUEUE_ATTRS="$(printf '{"RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"%s\\",\\"maxReceiveCount\\":\\"3\\"}"}' "$DLQ_ARN")"
+DRIVER_QUEUE_URL="$(awslocal sqs create-queue --queue-name fleetops_driver_queue \
+  --attributes "$DRIVER_QUEUE_ATTRS" --region "$REGION" --output text --query 'QueueUrl')"
 DRIVER_QUEUE_ARN="$(queue_arn "$DRIVER_QUEUE_URL")"
-
-# Redrive policy: los mensajes recibidos 3 veces sin éxito pasan a la DLQ.
-REDRIVE_POLICY="{\"deadLetterTargetArn\":\"${DLQ_ARN}\",\"maxReceiveCount\":\"3\"}"
-ATTRS_JSON="{\"RedrivePolicy\":\"$(escape_json "$REDRIVE_POLICY")\"}"
-awslocal sqs set-queue-attributes --queue-url "$DRIVER_QUEUE_URL" \
-  --attributes "$ATTRS_JSON" --region "$REGION"
 
 # ── Topics de documentos e incidentes ───────────────────────────────────────
 DOC_TOPIC_ARN="$(topic_arn fleetops_document_events)"
@@ -50,26 +42,29 @@ INCIDENT_TOPIC_ARN="$(topic_arn fleetops_incident_events)"
 
 # ── Suscripciones con filter policy y raw message delivery ──────────────────
 subscribe() {
-  local topic_arn="$1"
-  local queue_arn="$2"
-  local filter_policy="$3"
+  topic_arn="$1"
+  queue_arn="$2"
+  filter_policy="$3"
 
-  if awslocal sns list-subscriptions-by-topic --topic-arn "$topic_arn" --region "$REGION" \
-      --output text --query "Subscriptions[?Endpoint=='${queue_arn}'].SubscriptionArn" | grep -q .; then
+  subs="$(awslocal sns list-subscriptions-by-topic --topic-arn "$topic_arn" --region "$REGION" \
+    --output text --query "Subscriptions[?Endpoint=='${queue_arn}'].SubscriptionArn")"
+  if [ -n "$subs" ]; then
     echo "Suscripción ya existe: $topic_arn -> $queue_arn"
     return 0
   fi
 
-  local attrs_json
-  attrs_json="{\"RawMessageDelivery\":\"true\",\"FilterPolicy\":\"$(escape_json "$filter_policy")\"}"
+  attrs="$(printf '{"RawMessageDelivery":"true","FilterPolicy":"%s"}' "$filter_policy")"
   awslocal sns subscribe --topic-arn "$topic_arn" --protocol sqs \
-    --notification-endpoint "$queue_arn" --attributes "$attrs_json" --region "$REGION" > /dev/null
+    --notification-endpoint "$queue_arn" --attributes "$attrs" --region "$REGION" > /dev/null
   echo "Suscripción creada: $topic_arn -> $queue_arn"
 }
 
-subscribe "$DOC_TOPIC_ARN" "$DRIVER_QUEUE_ARN" \
-  '{"event_type":["document_expired_event","document_renewed_event"]}'
-subscribe "$INCIDENT_TOPIC_ARN" "$DRIVER_QUEUE_ARN" \
-  '{"event_type":["severe_incident_reported_event"]}'
+# El filter policy viaja como cadena JSON ya escapada (valor del atributo FilterPolicy).
+DOC_FILTER='{\"event_type\":[\"document_expired_event\",\"document_renewed_event\"]}'
+INCIDENT_FILTER='{\"event_type\":[\"severe_incident_reported_event\"]}'
+
+subscribe "$DOC_TOPIC_ARN" "$DRIVER_QUEUE_ARN" "$DOC_FILTER"
+subscribe "$INCIDENT_TOPIC_ARN" "$DRIVER_QUEUE_ARN" "$INCIDENT_FILTER"
 
 echo "Recursos SNS/SQS listos en LocalStack."
+

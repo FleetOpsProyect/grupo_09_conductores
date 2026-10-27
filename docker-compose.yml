@@ -32,7 +32,9 @@ services:
       start_period: 20s
 
   localstack:
-    image: localstack/localstack:latest
+    # 4.14.0 es la última imagen Community; el tag `latest` (>= 2026.03) exige
+    # LOCALSTACK_AUTH_TOKEN (licencia) y no arranca sin él.
+    image: localstack/localstack:4.14.0
     container_name: conductores_localstack
     environment:
       SERVICES: sns,sqs
@@ -43,7 +45,7 @@ services:
     volumes:
       - "./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh:ro"
     healthcheck:
-      test: ["CMD-SHELL", "awslocal sqs list-queues | grep -q fleetops_driver_queue"]
+      test: ["CMD", "awslocal", "sqs", "get-queue-url", "--queue-name", "fleetops_driver_queue"]
       interval: 10s
       timeout: 5s
       retries: 10
