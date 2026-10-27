@@ -11,9 +11,9 @@ import lombok.Getter;
 @Getter
 public class Driver {
 
-    private static final Pattern DOCUMENT_NUMBER = Pattern.compile("^[0-9]{6,10}$");
-    private static final Pattern PHONE = Pattern.compile("^3[0-9]{9}$");
-    private static final Pattern EMAIL = Pattern.compile(
+    private static final Pattern DOCUMENT_NUMBER_PATTERN = Pattern.compile("^[0-9]{6,10}$");
+    private static final Pattern PHONE_PATTERN = Pattern.compile("^3[0-9]{9}$");
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(
             "^[^@\\s]+@[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\\.[a-zA-Z]{2,}$");
     private static final int MAX_EMAIL_LENGTH = 100;
 
@@ -52,7 +52,7 @@ public class Driver {
      */
     public static Driver register(String fullName, String documentNumber, String email, String phone,
             OffsetDateTime now) {
-        if (documentNumber == null || !DOCUMENT_NUMBER.matcher(documentNumber).matches()) {
+        if (documentNumber == null || !DOCUMENT_NUMBER_PATTERN.matcher(documentNumber).matches()) {
             throw new InvalidDriverException("document_number debe tener entre 6 y 10 dígitos");
         }
         validateEditableFields(fullName, email, phone);
@@ -115,10 +115,10 @@ public class Driver {
         if (fullName == null || fullName.trim().length() < 3 || fullName.trim().length() > 100) {
             throw new InvalidDriverException("full_name debe tener entre 3 y 100 caracteres");
         }
-        if (email == null || email.length() > MAX_EMAIL_LENGTH || !EMAIL.matcher(email.trim()).matches()) {
+        if (email == null || email.length() > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.matcher(email.trim()).matches()) {
             throw new InvalidDriverException("email no es válido");
         }
-        if (phone != null && !PHONE.matcher(phone).matches()) {
+        if (phone != null && !PHONE_PATTERN.matcher(phone).matches()) {
             throw new InvalidDriverException("phone debe tener 10 dígitos y empezar por 3");
         }
     }
