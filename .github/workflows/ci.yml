@@ -15,18 +15,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout del código
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Configurar JDK 21
-        uses: actions/setup-java@99b8673ff6ca2fb9991403c461e712a32230eb49 # v4.2.2
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'corretto'
 
       - name: Cache de dependencias Gradle
-        uses: actions/cache@1bc1140533bdc621d8b9e5863ca6884022a1215b # v4.1.2
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
@@ -55,7 +55,7 @@ jobs:
         run: ./gradlew bootJar -x test
 
       - name: Publicar reporte JaCoCo
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: jacoco-report
@@ -63,7 +63,7 @@ jobs:
           retention-days: 7
 
       - name: Qodo — revisión automática del PR
-        uses: Codium-ai/pr-agent@afe037e9760bd99cbda7ed5b3454cb94d5e08ca7 # main
+        uses: Codium-ai/pr-agent@main
         if: github.event_name == 'pull_request'
         continue-on-error: true
         env:
@@ -78,18 +78,18 @@ jobs:
     needs: ci
     steps:
       - name: Checkout del código
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Configurar JDK 21
-        uses: actions/setup-java@99b8673ff6ca2fb9991403c461e712a32230eb49 # v4.2.2
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'corretto'
 
       - name: Cache Gradle
-        uses: actions/cache@1bc1140533bdc621d8b9e5863ca6884022a1215b # v4.1.2
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
