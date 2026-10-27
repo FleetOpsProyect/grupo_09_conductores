@@ -22,9 +22,9 @@ USER app
 EXPOSE 8085
 
 ENV SERVER_PORT=8085
-ENV JAVA_OPTS="-Xms256m -Xmx512m"
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -q -O - "http://127.0.0.1:${SERVER_PORT}/health" > /dev/null || exit 1
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["java", "-jar", "app.jar"]
