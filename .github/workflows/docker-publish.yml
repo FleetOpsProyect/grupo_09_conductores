@@ -2,6 +2,9 @@ name: Docker - Build and Publish
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - chore/setup-ec2-dockerhub-pipeline
 
 permissions:
   contents: read
