@@ -9,27 +9,11 @@ services:
       - .env
     environment:
       FIREBASE_EMULATOR_HOST: firestore-emulator:8080
-      SPRING_RABBITMQ_HOST: rabbitmq
-      SPRING_RABBITMQ_PORT: 5672
     ports:
       - "${SERVER_PORT:-8085}:${SERVER_PORT:-8085}"
     depends_on:
       firestore-emulator:
         condition: service_healthy
-
-  rabbitmq:
-    image: rabbitmq:4.4.0-management
-    container_name: conductores_rabbitmq
-    profiles:
-      - broker
-    ports:
-      - "5650:5672"     # AMQP
-      - "15650:15672"   # Consola de administración
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   firestore-emulator:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:590.0.1-emulators
