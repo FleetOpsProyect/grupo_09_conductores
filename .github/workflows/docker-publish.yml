@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - chore/setup-ec2-dockerhub-pipeline
+      - main
 
 permissions:
   contents: read
