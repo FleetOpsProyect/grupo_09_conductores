@@ -266,9 +266,8 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
   es trabajo de TEC_02.
 - No están implementados la integración con Documentación ni el Circuit Breaker: URL del servicio,
   timeout de 2 s, 5 fallos consecutivos y 30 s con el circuito abierto.
-- No están implementados aún el outbox, la publicación/consumo de eventos, `processed_events` ni
-  la DLQ. La infraestructura SNS/SQS queda lista (LocalStack en local, recursos de AWS en
-  producción); el código productor/consumidor es trabajo pendiente.
+- Los eventos no están implementados todavía: el broker es AWS SNS + SQS con Transactional Outbox
+  (TEC_05); LocalStack para pruebas locales y de integración llega con DEV_09.
 - Faltan el listado de elegibles, el alta médica y el borrado lógico.
 - Los errores de validación usan códigos y estructura parcialmente distintos a los propuestos en el documento de historias de usuario que tenemos como grupo
   (`errors[].message` en lugar de `errors[].code`).
