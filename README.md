@@ -11,7 +11,7 @@ con OpenAPI.
 - Spring Boot Actuator y Micrometer con registro Prometheus.
 - springdoc-openapi 3.1.1 para Swagger UI.
 - JUnit Jupiter, Mockito y Testcontainers.
-- RabbitMQ opcional para desarrollo local.
+- Spring Cloud AWS (SNS + SQS) para eventos.
 
 ## Requisitos
 
@@ -30,10 +30,7 @@ Compose las variables llegan al contenedor mediante `env_file`.
 | `FIREBASE_PROJECT_ID` | `demo-conductores` | `demo-conductores` | Proyecto de Firebase/Firestore. |
 | `FIREBASE_EMULATOR_HOST` | `localhost:8180` | `firestore-emulator:8080` | Emulador local. En producción debe quedar vacío. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | — | Ruta al JSON de la cuenta de servicio en producción. No se versiona. |
-| `SPRING_RABBITMQ_HOST` | `localhost` | `rabbitmq` | Broker local; en Compose solo se usa con el perfil `broker`. |
-| `SPRING_RABBITMQ_PORT` | `5650` | `5672` | Puerto AMQP expuesto en el host y puerto interno del contenedor. |
-| `SPRING_RABBITMQ_USERNAME` | `guest` | `guest` | Usuario de RabbitMQ. |
-| `SPRING_RABBITMQ_PASSWORD` | `guest` | `guest` | Contraseña de RabbitMQ. |
+| `AWS_REGION` | `us-east-1` | `us-east-1` | Región de AWS para SNS y SQS; solo se usa cuando se implementen los eventos. |
 | `JAVA_OPTS` | — | `-Xms256m -Xmx512m` | Opciones de la JVM en la imagen Docker; se pueden sobrescribir. |
 
 `GOOGLE_APPLICATION_CREDENTIALS` debe definirse como variable de entorno real del contenedor o del
@@ -65,19 +62,6 @@ docker compose up --build
 
 Compose levanta el emulador de Firestore y el servicio `backend`. El backend espera a que Firestore
 esté saludable y sobrescribe `FIREBASE_EMULATOR_HOST` con `firestore-emulator:8080`.
-
-Para incluir RabbitMQ, activa el perfil `broker`:
-
-```bash
-docker compose --profile broker up --build
-```
-
-La consola de RabbitMQ queda en `http://localhost:15650` y el puerto AMQP en `localhost:5650`.
-Para detener todo, incluido el perfil `broker`:
-
-```bash
-docker compose --profile broker down
-```
 
 ## Endpoints
 
@@ -197,8 +181,8 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
   es trabajo de TEC_02.
 - No están implementados la integración con Documentación ni el Circuit Breaker: URL del servicio,
   timeout de 2 s, 5 fallos consecutivos y 30 s con el circuito abierto.
-- No están implementados los eventos, la DLQ, `processed_events` ni la publicación/consumo en
-  RabbitMQ. El broker solo se levanta con el perfil `broker`.
+- Los eventos no están implementados todavía: el broker es AWS SNS + SQS con Transactional Outbox
+  (TEC_05); LocalStack para pruebas locales y de integración llega con DEV_09.
 - Faltan el listado de elegibles, el alta médica y el borrado lógico.
 - Los errores de validación usan códigos y estructura parcialmente distintos a los propuestos en el documento de historias de usuario que tenemos como grupo
   (`errors[].message` en lugar de `errors[].code`).
