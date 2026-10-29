@@ -85,11 +85,17 @@ jobs:
             IMAGE_TAG="${{ github.sha }}"
             IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:$IMAGE_TAG"
 
-            echo "Pulling image $IMAGE"
+            PREVIOUS_TAG=$(grep '^IMAGE_TAG=' .env | cut -d= -f2 || true)
+
+            echo "Deploying image $IMAGE (previous tag: ${PREVIOUS_TAG:-none})"
             docker pull "$IMAGE"
 
             echo "Updating version"
-            sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" .env
+            if grep -q '^IMAGE_TAG=' .env; then
+              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" .env
+            else
+              echo "IMAGE_TAG=$IMAGE_TAG" >> .env
+            fi
 
             echo "Recreating backend"
             docker compose -f docker-compose.prod.yml up -d --no-deps backend
@@ -97,7 +103,7 @@ jobs:
             echo "Checking application health"
             for i in $(seq 1 18); do
               if curl -fsS http://localhost:8085/health > /dev/null; then
-                echo "Deployment successful"
+                echo "Deployment successful ($IMAGE_TAG)"
                 exit 0
               fi
               sleep 5
@@ -105,5 +111,12 @@ jobs:
 
             echo "Backend did not respond correctly"
             docker compose -f docker-compose.prod.yml ps
+            if [ -n "$PREVIOUS_TAG" ]; then
+              echo "Rolling back to $PREVIOUS_TAG"
+              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_TAG/" .env
+              docker compose -f docker-compose.prod.yml up -d --no-deps backend
+            else
+              echo "No previous tag to roll back to"
+            fi
             exit 1
 
