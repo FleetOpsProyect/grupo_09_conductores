@@ -33,9 +33,9 @@ Compose las variables llegan al contenedor mediante `env_file`.
 | `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. Vacío en producción. | vacío | Implementada |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Ruta al JSON de la cuenta de servicio. En producción apunta a `/secrets/firebase-adminsdk.json` dentro del contenedor. | — | Implementada (SDK) |
 | `AWS_REGION` | Región de AWS para SNS/SQS. | `us-east-1` | Implementada |
-| `AWS_ACCESS_KEY_ID` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Implementada |
-| `AWS_SECRET_ACCESS_KEY` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Implementada |
-| `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Implementada |
+| `AWS_ACCESS_KEY_ID` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Prevista |
+| `AWS_SECRET_ACCESS_KEY` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Prevista |
+| `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Prevista |
 | `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor (por ejemplo `-XX:MaxRAMPercentage=75.0`). | `-XX:MaxRAMPercentage=75.0` | Implementada |
 | `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | — | Prevista |
 | `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | — | Prevista |
