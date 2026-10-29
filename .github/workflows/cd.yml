@@ -1,4 +1,4 @@
-name: Docker - Build and Publish
+name: CD — Despliegue continuo
 
 on:
   workflow_dispatch:
