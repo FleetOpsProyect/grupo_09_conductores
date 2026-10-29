@@ -1,0 +1,38 @@
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: ms-conductores
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:us-east-1}
+
+server:
+  port: ${SERVER_PORT}
+
+app:
+  firebase:
+    project-id: ${FIREBASE_PROJECT_ID}
+    emulator-host: ${FIREBASE_EMULATOR_HOST:}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    try-it-out-enabled: true
+
+management:
+  endpoints:
+    web:
+      base-path: /
+      path-mapping:
+        prometheus: metrics
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: never
