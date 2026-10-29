@@ -59,7 +59,9 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:${{ github.sha }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:latest
 
   
   deploy:
