@@ -80,10 +80,10 @@ jobs:
           command_timeout: 5m
           script: |
             set -e
-            cd /home/ec2-user/app
+            cd ~/app
 
             IMAGE_TAG="${{ github.sha }}"
-            IMAGE="zoikle/ms-conductores:$IMAGE_TAG"
+            IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:$IMAGE_TAG"
 
             echo "Pulling image $IMAGE"
             docker pull "$IMAGE"
