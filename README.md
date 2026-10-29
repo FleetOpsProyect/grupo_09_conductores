@@ -188,8 +188,33 @@ if [ "$(git branch --show-current)" = "main" ]; then
 fi
 ```
 
-Secretos que deben existir para los workflows (pasos 13/14): `DOCKERHUB_USERNAME` y
-`DOCKERHUB_TOKEN`.
+Los secretos necesarios se listan en la sección Despliegue continuo (CD).
+
+## Despliegue continuo (CD)
+
+El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o manualmente con
+`workflow_dispatch`) y automatiza el despliegue a la EC2:
+
+1. **Pruebas:** `./gradlew clean build` (Checkstyle, pruebas y cobertura).
+2. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
+   y `latest`.
+3. **Despliegue:** por SSH a la EC2, `docker compose -f docker-compose.prod.yml up -d` con la
+   nueva etiqueta.
+4. **Verificación:** se consulta `/health`; si no responde `200`, se revierte automáticamente a la
+   etiqueta anterior.
+
+Secretos de GitHub necesarios:
+
+- `DOCKERHUB_USERNAME` y `DOCKERHUB_TOKEN` (token de acceso de Docker Hub, no la contraseña).
+- `EC2_HOST`, `EC2_USER` y `EC2_SSH_KEY` (clave privada de un par dedicado al pipeline, no una
+  clave personal).
+
+En la EC2, dentro de `~/app`, deben existir: `docker-compose.prod.yml`, un `.env` creado desde
+`.env.prod.example` y el JSON de la cuenta de servicio de Firebase (permisos `600`, montado como
+volumen de solo lectura). Ninguno de estos archivos se versiona.
+
+Rollback manual: define `IMAGE_TAG=<SHA anterior>` en el `.env` de la EC2 y ejecuta
+`docker compose -f docker-compose.prod.yml up -d --no-deps backend`.
 
 ## Pruebas y calidad
 
@@ -279,5 +304,5 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
   `created_at`.
 - Un UUID mal formado responde `400`; en la documentación lo proponemos como `404`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- No hay logs estructurados JSON, pipeline de CD ni dashboards de Grafana por ahora.
+- No hay logs estructurados JSON ni dashboards de Grafana por ahora.
 - La especificación OpenAPI no indica que los roles y la regla “solo el propio conductor” (HU-03) son de fase 2; en el MVP cualquier token válido tiene acceso completo (TEC_02).
