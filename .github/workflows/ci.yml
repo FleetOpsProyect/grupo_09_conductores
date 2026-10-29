@@ -47,6 +47,7 @@ jobs:
 
   sonar:
     name: SonarCloud Analysis
+    needs: ci
     runs-on: ubuntu-latest
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
@@ -69,6 +70,7 @@ jobs:
 
   qodo:
     name: Qodo — revisión automática del PR
+    needs: ci
     runs-on: ubuntu-latest
     if: github.event.pull_request.head.repo.full_name == github.repository
     permissions:

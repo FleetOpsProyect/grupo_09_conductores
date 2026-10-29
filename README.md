@@ -193,14 +193,16 @@ Los secretos necesarios se listan en la sección Despliegue continuo (CD).
 ## Despliegue continuo (CD)
 
 El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o manualmente con
-`workflow_dispatch`) y automatiza el despliegue a la EC2:
+`workflow_dispatch`). La publicación y el despliegue solo se ejecutan desde `main`; un
+`workflow_dispatch` desde otro branch solo corre las pruebas. Flujo:
 
 1. **Pruebas:** `./gradlew clean build` (Checkstyle, pruebas y cobertura).
-2. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
+2. **SonarCloud:** `./gradlew sonar`; si el Quality Gate falla, se detiene la publicación.
+3. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
    y `latest`.
-3. **Despliegue:** por SSH a la EC2, `docker compose -f docker-compose.prod.yml up -d` con la
+4. **Despliegue:** por SSH a la EC2, `docker compose -f docker-compose.prod.yml up -d` con la
    nueva etiqueta.
-4. **Verificación:** se consulta `/health`; si no responde `200`, se revierte automáticamente a la
+5. **Verificación:** se consulta `/health`; si no responde `200`, se revierte automáticamente a la
    etiqueta anterior.
 
 Secretos de GitHub necesarios:
@@ -278,8 +280,9 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
   caracteres. Ejemplo: `feat(HU-06): filter drivers by status`.
 - **Descripción:** se llena la plantilla `.github/pull_request_template.md`. Las secciones marcadas
   con `*` son obligatorias.
-- **Antes de pedir revisión:** el CI debe pasar (Checkstyle, pruebas, cobertura y SonarCloud). La
-  revisión automática de Qodo es una ayuda, no un bloqueo.
+- **Antes de pedir revisión:** el CI debe pasar (Checkstyle, pruebas, cobertura y SonarCloud). Los
+  checks obligatorios en la protección de la rama son `Build, Test y Calidad` y
+  `SonarCloud Analysis`; la revisión automática de Qodo es una ayuda, no un bloqueo.
 - Si el PR resuelve una limitación de la lista de abajo, se borra de esa lista en el mismo PR.
  
 
