@@ -155,6 +155,7 @@ sonar {
 				 '**/co/edu/univalle/conductores/**/dto/**,' +
 				 '**/co/edu/univalle/conductores/MsConductoresApplication.java'
 		property 'sonar.java.source', '21'
+		property 'sonar.qualitygate.wait', 'true'
 	}
 }
 

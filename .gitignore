@@ -43,7 +43,12 @@ application-dev.yml
 application-dev.yaml
 application-test.yml
 application-test.yaml
+
+# Variables de entorno reales (NO van al repo); los .example sí se versionan
 .env
+.env.*
+!.env.example
+!.env.prod.example
 
 # Firebase: credenciales de cuenta de servicio (NO van al repo)
 *firebase-adminsdk*.json

@@ -9,10 +9,13 @@ services:
       - .env
     environment:
       FIREBASE_EMULATOR_HOST: firestore-emulator:8080
+      SPRING_CLOUD_AWS_ENDPOINT: http://localstack:4566
     ports:
       - "${SERVER_PORT:-8085}:${SERVER_PORT:-8085}"
     depends_on:
       firestore-emulator:
+        condition: service_healthy
+      localstack:
         condition: service_healthy
 
   firestore-emulator:
@@ -27,3 +30,24 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  localstack:
+    # 4.14.0 es la última imagen Community; el tag `latest` (>= 2026.03) exige
+    # LOCALSTACK_AUTH_TOKEN (licencia) y no arranca sin él.
+    image: localstack/localstack:4.14.0
+    container_name: conductores_localstack
+    environment:
+      SERVICES: sns,sqs
+      DEBUG: "0"
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+    ports:
+      - "4566:4566"
+    volumes:
+      - "./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh:ro"
+    healthcheck:
+      test: ["CMD", "awslocal", "sqs", "get-queue-url", "--queue-name", "fleetops_driver_queue"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
