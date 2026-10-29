@@ -34,10 +34,14 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Build and test
-        run: ./gradlew clean build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: ./gradlew clean build jacocoTestReport sonar
 
   publish:
     needs: test
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
@@ -61,12 +65,13 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:${{ github.sha }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:latest
+            ${{ github.ref == 'refs/heads/main' && format('{0}/ms-conductores:latest', secrets.DOCKERHUB_USERNAME) || '' }}
 
   
   deploy:
     name: Deploy backend to EC2
     needs: publish
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
