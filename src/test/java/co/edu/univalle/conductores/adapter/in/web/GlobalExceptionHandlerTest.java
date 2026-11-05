@@ -1,6 +1,7 @@
 package co.edu.univalle.conductores.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
@@ -13,17 +14,22 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
+import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.mock.http.MockHttpInputMessage;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.validation.DirectFieldBindingResult;
 import org.springframework.validation.beanvalidation.SpringValidatorAdapter;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import tools.jackson.core.JacksonException;
@@ -154,6 +160,34 @@ class GlobalExceptionHandlerTest {
                 typeMismatch("abc", int.class, "page", 1), request);
 
         assertThat(response.getBody().errors()).containsExactly(new FieldError("page", "INVALID_TYPE"));
+    }
+
+    @Test
+    void springMvcExceptionIsRethrownByGenericHandler() {
+        HttpMediaTypeNotSupportedException ex = new HttpMediaTypeNotSupportedException(
+                MediaType.TEXT_PLAIN, List.of(MediaType.APPLICATION_JSON));
+
+        assertThat(catchThrowable(() -> handler.handleUnexpected(ex, request))).isSameAs(ex);
+    }
+
+    @Test
+    void unexpectedExceptionIsInternalErrorWithoutDetails() throws Exception {
+        ResponseEntity<ErrorResponse> response = handler.handleUnexpected(
+                new IllegalStateException("secret detail"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody().code()).isEqualTo("INTERNAL_ERROR");
+        assertThat(response.getBody().message()).isEqualTo("Error interno del servidor");
+    }
+
+    @Test
+    void methodNotAllowedWithoutSupportedMethodsHasNoAllowHeader() {
+        ResponseEntity<ErrorResponse> response = handler.handleMethodNotAllowed(
+                new HttpRequestMethodNotSupportedException("DELETE"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.METHOD_NOT_ALLOWED);
+        assertThat(response.getBody().code()).isEqualTo("METHOD_NOT_ALLOWED");
+        assertThat(response.getHeaders().containsHeader(HttpHeaders.ALLOW)).isFalse();
     }
 
     private MethodArgumentNotValidException invalidBody(SampleRequest body) throws Exception {
