@@ -11,10 +11,12 @@ import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
+import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,6 +34,10 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/drivers")
 public class DriverController {
+
+    /** Strict canonical UUID: 8-4-4-4-12 hexadecimal digits. */
+    private static final Pattern UUID_PATTERN = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     private final RegisterDriver registerDriver;
     private final GetDriver getDriver;
@@ -68,14 +74,14 @@ public class DriverController {
     }
 
     /**
-     * Consulta un conductor por id.
+     * Gets a driver by id. An id that is not a canonical UUID responds 404 DRIVER_NOT_FOUND.
      *
-     * @param id identificador del conductor
-     * @return conductor encontrado
+     * @param id driver id as received in the path
+     * @return driver found
      */
     @GetMapping("/{id}")
-    public DriverResponse get(@PathVariable UUID id) {
-        return DriverResponse.from(getDriver.get(id));
+    public DriverResponse get(@PathVariable String id) {
+        return DriverResponse.from(getDriver.get(parseId(id)));
     }
 
     /**
@@ -97,16 +103,32 @@ public class DriverController {
     }
 
     /**
-     * Actualiza los datos editables de un conductor.
+     * Updates the editable data of a driver. The body is validated first (400 INVALID_DATA);
+     * then an id that is not a canonical UUID responds 404 DRIVER_NOT_FOUND.
      *
-     * @param id identificador del conductor
-     * @param request datos nuevos
-     * @return conductor actualizado
+     * @param id driver id as received in the path
+     * @param request new data
+     * @return updated driver
      */
     @PutMapping("/{id}")
-    public DriverResponse update(@PathVariable UUID id, @Valid @RequestBody UpdateDriverRequest request) {
-        Driver driver = updateDriver.update(id, new UpdateDriver.Command(
+    public DriverResponse update(@PathVariable String id, @Valid @RequestBody UpdateDriverRequest request) {
+        Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
                 request.fullName(), request.email(), request.phone()));
         return DriverResponse.from(driver);
+    }
+
+    /**
+     * Converts the path id to a UUID. A value that is not a canonical UUID cannot match any driver,
+     * so it is reported as not found with the original value.
+     *
+     * @param id id as received
+     * @return parsed UUID
+     * @throws DriverNotFoundException when the id is not a canonical UUID
+     */
+    private static UUID parseId(String id) {
+        if (!UUID_PATTERN.matcher(id).matches()) {
+            throw new DriverNotFoundException(id);
+        }
+        return UUID.fromString(id);
     }
 }

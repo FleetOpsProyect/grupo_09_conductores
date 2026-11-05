@@ -105,7 +105,7 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 | Método | Ruta | Descripción |
 | :--- | :--- | :--- |
 | `POST` | `/drivers` | Registra un conductor. Responde `201`, `400` o `409`. |
-| `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200`, `400` o `404`. |
+| `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200` o `404` (también `404` si el id no es un UUID). |
 | `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). |
 | `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400` o `404`. |
 | `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
@@ -305,7 +305,6 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
   Spring en lugar del formato común de error (TEC_04). Se puede añadir un formato de error adicional al catalogo en la documentación.
 - `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda
   `created_at`.
-- Un UUID mal formado responde `400`; en la documentación lo proponemos como `404`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
 - No hay logs estructurados JSON ni dashboards de Grafana por ahora.
 - La especificación OpenAPI no indica que los roles y la regla “solo el propio conductor” (HU-03) son de fase 2; en el MVP cualquier token válido tiene acceso completo (TEC_02).

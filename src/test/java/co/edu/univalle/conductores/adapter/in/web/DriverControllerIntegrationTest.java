@@ -192,23 +192,53 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void getUnknownDriverReturns404() {
-        ResponseEntity<String> response = client().get().uri("/{id}", UUID.randomUUID())
-                .retrieve().toEntity(String.class);
+    void getUnknownDriverReturns404() throws Exception {
+        UUID id = UUID.randomUUID();
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        assertThat(response.getBody()).contains("DRIVER_NOT_FOUND");
+        assertDriverNotFound(response, id.toString());
     }
 
-    // Will change to 404 DRIVER_NOT_FOUND in TEC_04-3.
     @Test
-    void getWithMalformedIdReturns400() throws Exception {
-        ResponseEntity<String> response = client().get().uri("/no-es-uuid").retrieve().toEntity(String.class);
+    void getWithMalformedIdReturns404() throws Exception {
+        ResponseEntity<String> response = client().get().uri("/abc").retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertDriverNotFound(response, "abc");
+    }
+
+    // The strict regex rejects the non-canonical form and the API responds 404 DRIVER_NOT_FOUND.
+    @Test
+    void getWithNonCanonicalUuidReturns404() throws Exception {
+        ResponseEntity<String> response = client().get().uri("/1-2-3-4-5").retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertDriverNotFound(response, "1-2-3-4-5");
+    }
+
+    @Test
+    void putWithMalformedIdReturns404() throws Exception {
+        ResponseEntity<String> response = put("abc", """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertDriverNotFound(response, "abc");
+    }
+
+    // The body is validated before the method runs, so an invalid body wins over a malformed id.
+    @Test
+    void putWithMalformedIdAndInvalidBodyReturns400() throws Exception {
+        ResponseEntity<String> response = put("abc", """
+                {"full_name":"Carlos Pérez","email":"ana@localhost"}
+                """);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         JsonNode body = MAPPER.readTree(response.getBody());
         assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
-        assertThat(fieldCodes(body)).containsExactlyEntriesOf(Map.of("id", "INVALID_FORMAT"));
+        assertThat(fieldCodes(body)).containsExactlyEntriesOf(Map.of("email", "INVALID_FORMAT"));
     }
 
     @Test
@@ -283,6 +313,12 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
                 .body(body)
                 .retrieve()
                 .toEntity(String.class);
+    }
+
+    private static void assertDriverNotFound(ResponseEntity<String> response, String id) throws Exception {
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("DRIVER_NOT_FOUND");
+        assertThat(body.get("message").asText()).isEqualTo("No existe un conductor con id '" + id + "'");
     }
 
     private static Map<String, String> fieldCodes(JsonNode body) {
