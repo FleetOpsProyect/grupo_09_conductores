@@ -5,7 +5,10 @@ import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import com.google.api.core.ApiFuture;
+import com.google.api.gax.rpc.ApiException;
+import com.google.api.gax.rpc.StatusCode;
 import com.google.cloud.firestore.AggregateQuerySnapshot;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
@@ -13,25 +16,51 @@ import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
+import java.time.Duration;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
- * Adaptador de salida: implementa DriverRepository con Firestore.
+ * Outbound adapter: implements {@link DriverRepository} with Firestore.
+ *
+ * <p>Every Firestore call waits at most {@link #MAX_WAIT}. Timeouts and transient SDK errors become
+ * {@link PersistenceUnavailableException}; any other SDK error becomes {@link IllegalStateException}.
+ * No SDK exception type leaves this class. This class does not log: the web layer logs the failure once.
  */
 public class FirestoreDriverAdapter implements DriverRepository {
 
+    /**
+     * Maximum time a request waits for Firestore. Also used as the client retry budget.
+     * Initial value, to be validated in production: a multi-operation transaction under normal
+     * latency could get close to it.
+     */
+    public static final Duration MAX_WAIT = Duration.ofSeconds(2);
+
     private static final String DOCUMENT_NUMBERS = "document_numbers";
+
+    private static final Set<StatusCode.Code> TRANSIENT_CODES = EnumSet.of(
+            StatusCode.Code.UNAVAILABLE,
+            StatusCode.Code.DEADLINE_EXCEEDED,
+            StatusCode.Code.RESOURCE_EXHAUSTED,
+            StatusCode.Code.INTERNAL,
+            StatusCode.Code.ABORTED,
+            StatusCode.Code.CANCELLED,
+            StatusCode.Code.UNKNOWN);
 
     private final Firestore firestore;
 
     /**
-     * Crea el adaptador con el cliente de Firestore.
+     * Creates the adapter.
      *
-     * @param firestore cliente de Firestore
+     * @param firestore Firestore client
      */
     public FirestoreDriverAdapter(Firestore firestore) {
         this.firestore = firestore;
@@ -64,14 +93,27 @@ public class FirestoreDriverAdapter implements DriverRepository {
                 : Optional.empty();
     }
 
+    /**
+     * Lists drivers. The count and the page queries run in parallel and share one deadline, so the
+     * whole call also waits at most {@link #MAX_WAIT}. If the count fails, the page query is cancelled.
+     */
     @Override
     public PageResult<Driver> findAll(DriverStatus status, int page, int size) {
         Query query = drivers().orderBy("created_at");
         if (status != null) {
             query = query.whereEqualTo("status", status.name());
         }
-        AggregateQuerySnapshot count = await(query.count().get());
-        QuerySnapshot snapshot = await(query.offset(page * size).limit(size).get());
+        long deadline = deadline();
+        ApiFuture<AggregateQuerySnapshot> countFuture = query.count().get();
+        ApiFuture<QuerySnapshot> pageFuture = query.offset(page * size).limit(size).get();
+        AggregateQuerySnapshot count;
+        try {
+            count = await(countFuture, deadline);
+        } catch (RuntimeException ex) {
+            pageFuture.cancel(true);
+            throw ex;
+        }
+        QuerySnapshot snapshot = await(pageFuture, deadline);
         List<Driver> content = snapshot.getDocuments().stream()
                 .map(document -> DriverDocument.toDomain(document.getData()))
                 .toList();
@@ -82,17 +124,53 @@ public class FirestoreDriverAdapter implements DriverRepository {
         return firestore.collection(DriverDocument.COLLECTION);
     }
 
-    private static <T> T await(ApiFuture<T> future) {
+    private static long deadline() {
+        return System.nanoTime() + MAX_WAIT.toNanos();
+    }
+
+    private static <T> T await(Future<T> future) {
+        return await(future, deadline());
+    }
+
+    private static <T> T await(Future<T> future, long deadline) {
         try {
-            return future.get();
-        } catch (InterruptedException e) {
+            return future.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException ex) {
+            future.cancel(true);
+            throw new PersistenceUnavailableException("Firestore did not answer within " + MAX_WAIT, ex);
+        } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Operación de Firestore interrumpida", e);
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof RuntimeException runtime) {
-                throw runtime;
-            }
-            throw new IllegalStateException("Error al acceder a Firestore", e.getCause());
+            future.cancel(true);
+            throw new PersistenceUnavailableException("Firestore call interrupted", ex);
+        } catch (ExecutionException ex) {
+            throw translate(ex.getCause());
         }
+    }
+
+    /**
+     * Maps the failure of a Firestore call to a non-SDK exception.
+     *
+     * @param failure cause reported by the SDK future
+     * @return the domain exception to rethrow
+     */
+    private static RuntimeException translate(Throwable failure) {
+        if (failure instanceof DuplicateDocumentException duplicate) {
+            return duplicate;
+        }
+        ApiException api = findApiException(failure);
+        if (api != null && TRANSIENT_CODES.contains(api.getStatusCode().getCode())) {
+            return new PersistenceUnavailableException(
+                    "Firestore unavailable: " + api.getStatusCode().getCode(), failure);
+        }
+        return new IllegalStateException("Firestore call failed", failure);
+    }
+
+    private static ApiException findApiException(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof ApiException api) {
+                return api;
+            }
+        }
+        return null;
     }
 }

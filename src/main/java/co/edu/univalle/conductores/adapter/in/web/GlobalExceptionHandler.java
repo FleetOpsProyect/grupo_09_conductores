@@ -5,6 +5,7 @@ import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.InvalidDriverException;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -185,6 +186,24 @@ public class GlobalExceptionHandler {
             headers.setAllow(ex.getSupportedHttpMethods());
         }
         return ResponseEntity.status(response.getStatusCode()).headers(headers).body(response.getBody());
+    }
+
+    /**
+     * Persistence store down or too slow: 503 SERVICE_UNAVAILABLE with a fixed message.
+     *
+     * <p>This is the only place where the failure is logged at ERROR: every endpoint goes through it
+     * and it has the request context. The adapter only translates and the services do not catch.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error without exception details
+     */
+    @ExceptionHandler(PersistenceUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handlePersistenceUnavailable(PersistenceUnavailableException ex,
+            HttpServletRequest request) {
+        log.error("Persistence unavailable on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE",
+                "Servicio temporalmente no disponible, intente nuevamente", request, List.of());
     }
 
     /**

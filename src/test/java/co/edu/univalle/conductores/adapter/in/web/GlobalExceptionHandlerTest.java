@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.domain.DriverStatus;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
@@ -178,6 +179,18 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(response.getBody().code()).isEqualTo("INTERNAL_ERROR");
         assertThat(response.getBody().message()).isEqualTo("Error interno del servidor");
+    }
+
+    @Test
+    void persistenceUnavailableIsServiceUnavailableWithFixedMessage() {
+        ResponseEntity<ErrorResponse> response = handler.handlePersistenceUnavailable(
+                new PersistenceUnavailableException("secret detail", new IllegalStateException("cause")), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody().code()).isEqualTo("SERVICE_UNAVAILABLE");
+        assertThat(response.getBody().message()).isEqualTo("Servicio temporalmente no disponible, intente nuevamente");
+        assertThat(response.getBody().path()).isEqualTo("/drivers");
+        assertThat(response.getBody().errors()).isEmpty();
     }
 
     @Test

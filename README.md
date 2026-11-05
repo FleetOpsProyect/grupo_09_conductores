@@ -104,10 +104,10 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 
 | Método | Ruta | Descripción |
 | :--- | :--- | :--- |
-| `POST` | `/drivers` | Registra un conductor. Responde `201`, `400` o `409`. |
-| `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200` o `404` (también `404` si el id no es un UUID). |
-| `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). |
-| `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400` o `404`. |
+| `POST` | `/drivers` | Registra un conductor. Responde `201`, `400`, `409` o `503`. |
+| `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200`, `404` (también `404` si el id no es un UUID) o `503`. |
+| `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503`. |
+| `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503`. |
 | `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
 | `GET` | `/metrics` | Métricas en formato Prometheus. |
 | `GET` | `/info` | Información del servicio. |
@@ -142,6 +142,62 @@ Este índice cubre el listado con filtro por estado y orden por fecha de creaci�
 El emulador no exige este índice, pero Firestore real sí. Despliégalo con
 `firebase deploy --only firestore:indexes`; de lo contrario, el listado filtrado por `status`
 falla.
+
+### Firestore no disponible
+
+Si Firestore no responde, `POST /drivers`, `GET /drivers/{id}`, `GET /drivers` y
+`PUT /drivers/{id}` responden `503` con el formato común de error:
+
+```json
+{
+  "code": "SERVICE_UNAVAILABLE",
+  "message": "Servicio temporalmente no disponible, intente nuevamente",
+  "timestamp": "2026-11-05T15:56:54.276-05:00",
+  "path": "/drivers"
+}
+```
+
+- Cada llamada a Firestore espera como máximo 2 s (`FirestoreDriverAdapter.MAX_WAIT`). La misma
+  constante limita los reintentos internos del cliente (`FirestoreConfig`), que por defecto
+  llegan a 60 s. **Es un valor inicial pendiente de validar en producción**: una transacción de
+  varias operaciones con latencia normal podría acercarse a ese límite.
+- Un fallo de Firestore nunca se responde como `404`.
+- El fallo se registra una sola vez, con nivel `ERROR`, en `GlobalExceptionHandler`.
+- Errores no transitorios del SDK (permisos, credenciales, índice faltante) siguen siendo
+  `500 INTERNAL_ERROR`, porque reintentar no los resuelve.
+- Al volver Firestore, el servicio se recupera solo, sin reiniciarlo.
+
+#### Riesgos
+
+- Una transacción cancelada por timeout (por ejemplo, el registro de `POST /drivers`) puede
+  confirmarse en el servidor después de que el cliente recibió `503`. Si el cliente reintenta,
+  recibirá `409` porque el conductor ya existe.
+- La primera llamada tras arrancar el servicio (o el emulador) abre la conexión y puede pasar de
+  2 s; en la prueba manual el primer `POST` respondió `503` con el emulador recién levantado.
+
+#### Prueba manual
+
+Con el servicio en `http://localhost:8085` (ver [Ejecución local](#ejecución-local)) y un
+conductor creado con id `$ID`:
+
+```bash
+docker stop conductores_firestore
+
+curl -i -X POST http://localhost:8085/drivers -H 'Content-Type: application/json' \
+  -d '{"full_name":"Ana Gómez","document_number":"1144056790","email":"ana@correo.com"}'
+curl -i http://localhost:8085/drivers/$ID
+curl -i "http://localhost:8085/drivers?page=0&size=10"
+curl -i -X PUT http://localhost:8085/drivers/$ID -H 'Content-Type: application/json' \
+  -d '{"full_name":"Ana M. Gómez","email":"ana@correo.com"}'
+
+docker start conductores_firestore
+```
+
+Resultado esperado con el emulador detenido: los cuatro responden `503 SERVICE_UNAVAILABLE` en
+unos 2 s, `GET /health` responde `503` y el log muestra una línea `ERROR` por petición. Tras
+`docker start`, los endpoints vuelven a `201`/`200` en unos segundos sin reiniciar el servicio.
+El emulador guarda los datos en memoria: los conductores creados antes de `docker stop` ya no
+existen y su `GET` responde `404`, que es correcto.
 
 ## Producción (EC2)
 
@@ -299,8 +355,6 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
 - Faltan el listado de elegibles, el alta médica y el borrado lógico.
 - Los errores de validación usan códigos y estructura parcialmente distintos a los propuestos en el documento de historias de usuario que tenemos como grupo
   (`errors[].message` en lugar de `errors[].code`).
-- Cuando Firestore no está disponible, la API responde `500`; en la documentación planteamos
-  `503 SERVICE_UNAVAILABLE`.
 - Las rutas desconocidas (por ejemplo, `/drivres`) devuelven el cuerpo de error por defecto de
   Spring en lugar del formato común de error (TEC_04). Se puede añadir un formato de error adicional al catalogo en la documentación.
 - `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda

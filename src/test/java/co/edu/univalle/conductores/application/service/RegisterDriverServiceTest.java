@@ -11,6 +11,7 @@ import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -59,5 +60,15 @@ class RegisterDriverServiceTest {
 
         assertThatThrownBy(() -> service.register(command))
                 .isInstanceOf(DuplicateDocumentException.class);
+    }
+
+    @Test
+    void registerPropagatesPersistenceUnavailable() {
+        RegisterDriver.Command command = new RegisterDriver.Command("Carlos Pérez", "1144056789",
+                "carlos@correo.com", null);
+        PersistenceUnavailableException unavailable = new PersistenceUnavailableException("down", null);
+        doThrow(unavailable).when(repository).createWithUniqueness(any(Driver.class));
+
+        assertThatThrownBy(() -> service.register(command)).isSameAs(unavailable);
     }
 }
