@@ -17,12 +17,26 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import tools.jackson.databind.exc.MismatchedInputException;
 
 /**
  * Manejador global de errores: convierte las excepciones en el formato de error común.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final String INVALID_DATA = "INVALID_DATA";
+
+    private final JsonFieldNameResolver fieldNames;
+
+    /**
+     * Creates the handler.
+     *
+     * @param fieldNames resolves the JSON name of invalid fields
+     */
+    public GlobalExceptionHandler(JsonFieldNameResolver fieldNames) {
+        this.fieldNames = fieldNames;
+    }
 
     /**
      * Conductor inexistente (404).
@@ -61,28 +75,30 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Errores de validación del cuerpo, con todos los campos inválidos (400).
+     * Invalid request body: 400 INVALID_DATA with one entry per invalid field.
      *
-     * @param ex excepción lanzada
-     * @param request petición actual
-     * @return error común con el detalle por campo
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-field detail
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex,
             HttpServletRequest request) {
+        Object target = ex.getBindingResult().getTarget();
         List<FieldError> errors = ex.getBindingResult().getFieldErrors().stream()
-                .map(error -> new FieldError(error.getField(), error.getDefaultMessage()))
+                .map(error -> new FieldError(fieldNames.resolve(target, error.getField()),
+                        ValidationErrorCodes.fromConstraint(error.getCode())))
                 .toList();
-        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Hay datos inválidos en la solicitud",
-                request, errors);
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay datos inválidos en la solicitud",
+                request, ValidationErrorCodes.onePerField(errors));
     }
 
     /**
-     * Errores de validación de parámetros de consulta, como page o size (400).
+     * Invalid request parameters such as page or size: 400 INVALID_DATA with one entry per parameter.
      *
-     * @param ex excepción lanzada
-     * @param request petición actual
-     * @return error común con el detalle por parámetro
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-parameter detail
      */
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ResponseEntity<ErrorResponse> handleInvalidParams(HandlerMethodValidationException ex,
@@ -90,21 +106,45 @@ public class GlobalExceptionHandler {
         List<FieldError> errors = ex.getParameterValidationResults().stream()
                 .flatMap(result -> result.getResolvableErrors().stream()
                         .map(error -> new FieldError(result.getMethodParameter().getParameterName(),
-                                error.getDefaultMessage())))
+                                ValidationErrorCodes.fromMessageCodes(error.getCodes()))))
                 .toList();
-        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Hay parámetros inválidos", request, errors);
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay parámetros inválidos", request,
+                ValidationErrorCodes.onePerField(errors));
     }
 
     /**
-     * Valores con formato incorrecto, como un id que no es UUID o un estado desconocido (400).
+     * Parameter that cannot be converted to its type, such as page=abc or an unknown status: 400 INVALID_DATA.
      *
-     * @param ex excepción lanzada
-     * @param request petición actual
-     * @return error común
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the invalid parameter
      */
-    @ExceptionHandler({MethodArgumentTypeMismatchException.class, HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorResponse> handleMalformed(Exception ex, HttpServletRequest request) {
-        return build(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Formato de datos inválido", request, List.of());
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex,
+            HttpServletRequest request) {
+        FieldError error = new FieldError(ex.getName(), ValidationErrorCodes.fromTargetType(ex.getRequiredType()));
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay parámetros inválidos", request, List.of(error));
+    }
+
+    /**
+     * Unreadable body. A value with the wrong type for a field is 400 INVALID_DATA for that field;
+     * a body that is not valid JSON is 400 INVALID_JSON.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex,
+            HttpServletRequest request) {
+        if (ex.getCause() instanceof MismatchedInputException mismatch && !mismatch.getPath().isEmpty()) {
+            FieldError error = new FieldError(fieldNames.fromJacksonPath(mismatch.getPath()),
+                    ValidationErrorCodes.fromTargetType(mismatch.getTargetType()));
+            return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay datos inválidos en la solicitud",
+                    request, List.of(error));
+        }
+        return build(HttpStatus.BAD_REQUEST, "INVALID_JSON", "El cuerpo de la solicitud no es un JSON válido",
+                request, List.of());
     }
 
     private ResponseEntity<ErrorResponse> build(HttpStatus status, String code, String message,
