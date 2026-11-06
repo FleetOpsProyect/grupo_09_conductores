@@ -85,6 +85,13 @@ class DriverTest {
     }
 
     @Test
+    void registerAcceptsEmailWithSingleLetterExtension() {
+        Driver driver = Driver.register("Carlos Pérez", "1144056789", "ana@x.c", null, NOW);
+
+        assertThat(driver.getEmail()).isEqualTo("ana@x.c");
+    }
+
+    @Test
     void registerRejectsInvalidEmail() {
         assertThatThrownBy(() -> Driver.register("Carlos Pérez", "1144056789", "carlos.correo.com", null, NOW))
                 .isInstanceOf(InvalidDriverException.class)
