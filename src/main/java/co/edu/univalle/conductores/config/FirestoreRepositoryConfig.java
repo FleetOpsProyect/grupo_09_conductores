@@ -13,13 +13,14 @@ import org.springframework.context.annotation.Configuration;
 public class FirestoreRepositoryConfig {
 
     /**
-     * Adaptador de persistencia de conductores.
+     * Driver persistence adapter, bounded by the configured Firestore timeout.
      *
-     * @param firestore cliente de Firestore
-     * @return implementación de DriverRepository
+     * @param firestore Firestore client
+     * @param properties Firestore settings
+     * @return DriverRepository implementation
      */
     @Bean
-    public DriverRepository driverRepository(Firestore firestore) {
-        return new FirestoreDriverAdapter(firestore);
+    public DriverRepository driverRepository(Firestore firestore, FirestoreProperties properties) {
+        return new FirestoreDriverAdapter(firestore, properties.timeout());
     }
 }

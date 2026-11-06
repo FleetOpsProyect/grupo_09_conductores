@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -31,18 +32,12 @@ import java.util.concurrent.TimeoutException;
 /**
  * Outbound adapter: implements {@link DriverRepository} with Firestore.
  *
- * <p>Every Firestore call waits at most {@link #MAX_WAIT}. Timeouts and transient SDK errors become
- * {@link PersistenceUnavailableException}; any other SDK error becomes {@link IllegalStateException}.
- * No SDK exception type leaves this class. This class does not log: the web layer logs the failure once.
+ * <p>Every Firestore call waits at most the configured timeout ({@code app.firestore.timeout}). Timeouts
+ * and transient SDK errors become {@link PersistenceUnavailableException}; any other SDK error becomes
+ * {@link IllegalStateException}. No SDK exception type leaves this class. This class does not log: the
+ * web layer logs the failure once.
  */
 public class FirestoreDriverAdapter implements DriverRepository {
-
-    /**
-     * Maximum time a request waits for Firestore. Also used as the client retry budget.
-     * Initial value, to be validated in production: a multi-operation transaction under normal
-     * latency could get close to it.
-     */
-    public static final Duration MAX_WAIT = Duration.ofSeconds(2);
 
     private static final String DOCUMENT_NUMBERS = "document_numbers";
 
@@ -57,13 +52,17 @@ public class FirestoreDriverAdapter implements DriverRepository {
 
     private final Firestore firestore;
 
+    private final Duration timeout;
+
     /**
      * Creates the adapter.
      *
      * @param firestore Firestore client
+     * @param timeout maximum time a request waits for Firestore
      */
-    public FirestoreDriverAdapter(Firestore firestore) {
+    public FirestoreDriverAdapter(Firestore firestore, Duration timeout) {
         this.firestore = firestore;
+        this.timeout = Objects.requireNonNull(timeout, "timeout");
     }
 
     @Override
@@ -95,7 +94,7 @@ public class FirestoreDriverAdapter implements DriverRepository {
 
     /**
      * Lists drivers. The count and the page queries run in parallel and share one deadline, so the
-     * whole call also waits at most {@link #MAX_WAIT}. If the count fails, the page query is cancelled.
+     * whole call also waits at most the configured timeout. If the count fails, the page query is cancelled.
      */
     @Override
     public PageResult<Driver> findAll(DriverStatus status, int page, int size) {
@@ -124,20 +123,20 @@ public class FirestoreDriverAdapter implements DriverRepository {
         return firestore.collection(DriverDocument.COLLECTION);
     }
 
-    private static long deadline() {
-        return System.nanoTime() + MAX_WAIT.toNanos();
+    private long deadline() {
+        return System.nanoTime() + timeout.toNanos();
     }
 
-    private static <T> T await(Future<T> future) {
+    private <T> T await(Future<T> future) {
         return await(future, deadline());
     }
 
-    private static <T> T await(Future<T> future, long deadline) {
+    private <T> T await(Future<T> future, long deadline) {
         try {
             return future.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
         } catch (TimeoutException ex) {
             future.cancel(true);
-            throw new PersistenceUnavailableException("Firestore did not answer within " + MAX_WAIT, ex);
+            throw new PersistenceUnavailableException("Firestore did not answer within " + timeout, ex);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             future.cancel(true);

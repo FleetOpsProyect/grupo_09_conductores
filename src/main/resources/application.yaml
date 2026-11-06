@@ -17,6 +17,8 @@ app:
   firebase:
     project-id: ${FIREBASE_PROJECT_ID}
     emulator-host: ${FIREBASE_EMULATOR_HOST:}
+  firestore:
+    timeout: ${FIRESTORE_TIMEOUT:2s}
 
 springdoc:
   api-docs:

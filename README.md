@@ -157,9 +157,11 @@ Si Firestore no responde, `POST /drivers`, `GET /drivers/{id}`, `GET /drivers` y
 }
 ```
 
-- Cada llamada a Firestore espera como máximo 2 s (`FirestoreDriverAdapter.MAX_WAIT`). La misma
-  constante limita los reintentos internos del cliente (`FirestoreConfig`), que por defecto
-  llegan a 60 s. **Es un valor inicial pendiente de validar en producción**: una transacción de
+- Cada llamada a Firestore espera como máximo el tiempo de la variable de entorno
+  `FIRESTORE_TIMEOUT` (propiedad `app.firestore.timeout`, por defecto `2s`). El mismo valor limita
+  los reintentos internos del cliente (`FirestoreConfig`), que por defecto llegan a 60 s, y la
+  comprobación de `GET /health`. Si el valor es menor a 1 ms o está vacío, el servicio no arranca.
+  **Es un valor inicial pendiente de validar en producción**: una transacción de
   varias operaciones con latencia normal podría acercarse a ese límite.
 - Un fallo de Firestore nunca se responde como `404`.
 - El fallo se registra una sola vez, con nivel `ERROR`, en `GlobalExceptionHandler`.

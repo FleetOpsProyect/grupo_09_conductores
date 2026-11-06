@@ -29,6 +29,7 @@ import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
 import com.google.cloud.firestore.Transaction;
 import io.grpc.Status;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -72,13 +73,15 @@ class FirestoreDriverAdapterTest {
     @Mock
     private AggregateQuery countQuery;
 
+    private static final Duration TIMEOUT = Duration.ofSeconds(2);
+
     private ApiFuture<QuerySnapshot> pageFuture;
 
     private FirestoreDriverAdapter adapter;
 
     @BeforeEach
     void setUp() {
-        adapter = new FirestoreDriverAdapter(firestore);
+        adapter = new FirestoreDriverAdapter(firestore, TIMEOUT);
     }
 
     @ParameterizedTest
@@ -126,6 +129,21 @@ class FirestoreDriverAdapterTest {
 
         verify(future).get(timeout.capture(), eq(TimeUnit.NANOSECONDS));
         assertThat(timeout.getValue()).isPositive().isLessThanOrEqualTo(TimeUnit.SECONDS.toNanos(2));
+    }
+
+    @ParameterizedTest
+    @EnumSource(Operation.class)
+    void waitsAtMostTheConfiguredTimeout(Operation operation) throws Exception {
+        adapter = new FirestoreDriverAdapter(firestore, Duration.ofMillis(500));
+        ApiFuture<Object> future = stub(operation);
+        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenThrow(new TimeoutException());
+        ArgumentCaptor<Long> timeout = ArgumentCaptor.forClass(Long.class);
+
+        Throwable thrown = catchThrowable(() -> invoke(operation));
+
+        verify(future).get(timeout.capture(), eq(TimeUnit.NANOSECONDS));
+        assertThat(timeout.getValue()).isPositive().isLessThanOrEqualTo(TimeUnit.MILLISECONDS.toNanos(500));
+        assertThat(thrown).isInstanceOf(PersistenceUnavailableException.class).hasMessageContaining("PT0.5S");
     }
 
     @ParameterizedTest

@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.config.FirestoreConfig;
+import co.edu.univalle.conductores.config.FirestoreProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.cloud.firestore.Firestore;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -73,7 +75,8 @@ class ErrorFormatIntegrationTest extends BaseIntegrationTest {
      * @return Firestore client for {@link #OWN_EMULATOR}
      */
     static Firestore isolatedFirestore() {
-        return new FirestoreConfig().firestore(PROJECT_ID, ownEmulatorHost());
+        return new FirestoreConfig().firestore(PROJECT_ID, ownEmulatorHost(),
+                new FirestoreProperties(Duration.ofSeconds(2)));
     }
 
     /**
