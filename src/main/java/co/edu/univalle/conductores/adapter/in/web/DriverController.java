@@ -31,6 +31,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Adaptador de entrada REST para los conductores.
  */
+@Tag(name = "Conductores",
+    description = "Registro, consulta, listado y actualización de conductores de FleetOps (G09)")
 @RestController
 @RequestMapping("/drivers")
 public class DriverController {
@@ -66,6 +68,30 @@ public class DriverController {
      * @param request datos del conductor
      * @return conductor creado con código 201
      */
+    @Operation(summary = "Registrar un conductor (HU-01)",
+        description = """
+            Crea un conductor con status ACTIVE. El campo status del cuerpo, si llega, se ignora.
+            El document_number debe ser único.
+
+            **Fase 2, no implementado:** solo el grupo Administrador de Flota podrá registrar \
+            conductores (403 ROLE_NOT_AUTHORIZED). En el MVP cualquier token válido puede hacerlo.""")
+    @ApiResponses({
+        @ApiResponse(responseCode = "201", description = "Conductor creado con status ACTIVE"),
+        @ApiResponse(responseCode = "400",
+            description = """
+                INVALID_DATA: uno o más campos no cumplen su regla; errors trae un elemento por \
+                cada campo inválido. INVALID_JSON: el cuerpo no es un JSON válido.""",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403",
+            description = "ROLE_NOT_AUTHORIZED: fase 2, no implementado en el MVP",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "409",
+            description = "DUPLICATE_DRIVER: ya existe un conductor con ese document_number",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503",
+            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
     @PostMapping
     public ResponseEntity<DriverResponse> register(@Valid @RequestBody RegisterDriverRequest request) {
         Driver driver = registerDriver.register(new RegisterDriver.Command(
@@ -79,6 +105,33 @@ public class DriverController {
      * @param id driver id as received in the path
      * @return driver found
      */
+    @Operation(summary = "Consultar un conductor por id (HU-02)",
+        description = """
+            Devuelve el conductor con su status actual. Un conductor inactivo \
+            (INACTIVE_EXPIRED_DOCUMENTS o MEDICAL_HOLD_INCIDENT) se devuelve con 200, no con 404. \
+            Las llamadas internas de otros microservicios, sin JWT, reciben la misma respuesta.
+
+            **Fase 2, no implementado (HU-03, regla "solo el propio"):** si cognito:groups incluye \
+            Conductor, el claim custom:driver_id debe ser igual al {id} de la ruta; si es distinto \
+            o no viene en el token, se responde 403 ACCESS_DENIED sin consultar la base de datos. \
+            En el MVP cualquier token válido consulta cualquier id.""")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Conductor encontrado"),
+        @ApiResponse(responseCode = "400",
+            description = "INVALID_DATA: el id no es un UUID válido",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403",
+            description = """
+                ACCESS_DENIED: fase 2, no implementado en el MVP. Un conductor intenta consultar \
+                un registro que no es el suyo, o su token no trae custom:driver_id.""",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404",
+            description = "DRIVER_NOT_FOUND: no existe un conductor con ese id",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503",
+            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
     @GetMapping("/{id}")
     public DriverResponse get(@PathVariable String id) {
         return DriverResponse.from(getDriver.get(parseId(id)));
@@ -92,6 +145,29 @@ public class DriverController {
      * @param size tamaño de página, entre 1 y 100
      * @return página de conductores
      */
+    @Operation(summary = "Listar conductores por estado (HU-06)",
+        description = """
+            Lista los conductores ordenados de forma ascendente por created_at, con filtro \
+            opcional por status. total es el número de conductores que cumplen el filtro en \
+            todas las páginas. Si ninguno lo cumple, o page supera la última página, responde \
+            200 con content vacío, nunca 404.
+
+            **Fase 2, no implementado:** un token del grupo Conductor recibirá \
+            403 ROLE_NOT_AUTHORIZED.""")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Página de conductores"),
+        @ApiResponse(responseCode = "400",
+            description = """
+                INVALID_DATA: status, page o size no cumplen su regla; errors trae un elemento \
+                por cada parámetro inválido.""",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "403",
+            description = "ROLE_NOT_AUTHORIZED: fase 2, no implementado en el MVP",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503",
+            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
     @GetMapping
     public DriverPageResponse list(@RequestParam(required = false) DriverStatus status,
             @RequestParam(defaultValue = "0") @Min(0) int page,
@@ -110,6 +186,26 @@ public class DriverController {
      * @param request new data
      * @return updated driver
      */
+    @Operation(summary = "Modificar los datos de un conductor (HU-08)",
+        description = """
+            Reemplaza los campos editables (full_name, email y phone) con las mismas reglas del \
+            registro. El cuerpo debe traer todos los campos obligatorios. El status del conductor \
+            no cambia.""")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Conductor actualizado"),
+        @ApiResponse(responseCode = "400",
+            description = """
+                INVALID_DATA: el id no es un UUID válido, o uno o más campos no cumplen su regla; \
+                errors trae un elemento por cada campo inválido. INVALID_JSON: el cuerpo no es \
+                un JSON válido.""",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "404",
+            description = "DRIVER_NOT_FOUND: no existe un conductor con ese id; no se crea ningún registro",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503",
+            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
     @PutMapping("/{id}")
     public DriverResponse update(@PathVariable String id, @Valid @RequestBody UpdateDriverRequest request) {
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
