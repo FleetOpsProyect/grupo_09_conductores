@@ -346,10 +346,6 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
 
 ## Limitaciones conocidas a corregir/implementar en futuro cercano
 
-- La API responde `201 Created`, pero la especificación OpenAPI aún publica `200`; alinear el
-  contrato es trabajo de TEC_02.
-- El título de la API sigue siendo el valor por defecto `OpenAPI definition`; el título definitivo
-  es trabajo de TEC_02.
 - No están implementados la integración con Documentación ni el Circuit Breaker: URL del servicio,
   timeout de 2 s, 5 fallos consecutivos y 30 s con el circuito abierto.
 - Los eventos no están implementados todavía: el broker es AWS SNS + SQS con Transactional Outbox
@@ -363,4 +359,6 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
   `created_at`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
 - No hay logs estructurados JSON ni dashboards de Grafana por ahora.
-- La especificación OpenAPI no indica que los roles y la regla “solo el propio conductor” (HU-03) son de fase 2; en el MVP cualquier token válido tiene acceso completo (TEC_02).
+- `PUT /drivers/{id}` no acepta `document_number`, así que no responde
+  `400 NOT_EDITABLE` cuando llega con un valor distinto (HU-08, criterio 2); por eso tampoco
+  aparece en la especificación OpenAPI.

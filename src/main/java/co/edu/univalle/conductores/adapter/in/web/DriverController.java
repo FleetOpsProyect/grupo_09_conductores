@@ -2,6 +2,7 @@ package co.edu.univalle.conductores.adapter.in.web;
 
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverPageResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverResponse;
+import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.RegisterDriverRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.UpdateDriverRequest;
 import co.edu.univalle.conductores.application.port.in.GetDriver;
@@ -12,6 +13,12 @@ import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -117,16 +124,15 @@ public class DriverController {
             En el MVP cualquier token válido consulta cualquier id.""")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Conductor encontrado"),
-        @ApiResponse(responseCode = "400",
-            description = "INVALID_DATA: el id no es un UUID válido",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403",
             description = """
                 ACCESS_DENIED: fase 2, no implementado en el MVP. Un conductor intenta consultar \
                 un registro que no es el suyo, o su token no trae custom:driver_id.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404",
-            description = "DRIVER_NOT_FOUND: no existe un conductor con ese id",
+            description = """
+                DRIVER_NOT_FOUND: no existe un conductor con ese id, o el id no es un UUID \
+                válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "503",
             description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
@@ -195,12 +201,14 @@ public class DriverController {
         @ApiResponse(responseCode = "200", description = "Conductor actualizado"),
         @ApiResponse(responseCode = "400",
             description = """
-                INVALID_DATA: el id no es un UUID válido, o uno o más campos no cumplen su regla; \
-                errors trae un elemento por cada campo inválido. INVALID_JSON: el cuerpo no es \
-                un JSON válido.""",
+                INVALID_DATA: uno o más campos no cumplen su regla (REQUIRED si falta un campo \
+                obligatorio); errors trae un elemento por cada campo inválido. INVALID_JSON: el \
+                cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404",
-            description = "DRIVER_NOT_FOUND: no existe un conductor con ese id; no se crea ningún registro",
+            description = """
+                DRIVER_NOT_FOUND: no existe un conductor con ese id, o el id no es un UUID \
+                válido; no se crea ningún registro.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "503",
             description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
