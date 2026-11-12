@@ -344,6 +344,86 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
 - Si el PR resuelve una limitación de la lista de abajo, se borra de esa lista en el mismo PR.
  
 
+## Infraestructura AWS (DEV_10)
+
+### Recursos SNS / SQS (us-east-1)
+
+| Recurso | Nombre | Tipo |
+| :--- | :--- | :--- |
+| Topic SNS | `fleetops_driver_events` | Standard |
+| Cola SQS | `fleetops_driver_queue` | Standard |
+| DLQ SQS | `fleetops_driver_dlq` | Standard |
+
+La cola tiene una redrive policy hacia la DLQ con `maxReceiveCount = 3`.
+
+Suscripciones externas (de otros equipos):
+
+| Topic origen | Endpoint | Raw delivery | Filter policy |
+| :--- | :--- | :--- | :--- |
+| `fleetops_document_events` | `fleetops_driver_queue` | ✅ | `{"event_type": ["document_expired_event", "document_renewed_event"]}` |
+| `fleetops_incident_events` | `fleetops_driver_queue` | ✅ | `{"event_type": ["severe_incident_reported_event"]}` |
+
+> Las suscripciones se crean cuando los topics de Documentación e Incidentes existan.
+
+### Rol IAM de la EC2
+
+Rol: `fleetops-conductores-ec2-role`. Política inline `fleetops-conductores-policy`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublishDriverEvents",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "arn:aws:sns:us-east-1:<ACCOUNT_ID>:fleetops_driver_events"
+    },
+    {
+      "Sid": "ConsumeDriverQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ChangeMessageVisibility"
+      ],
+      "Resource": "arn:aws:sqs:us-east-1:<ACCOUNT_ID>:fleetops_driver_queue"
+    },
+    {
+      "Sid": "SendToDLQ",
+      "Effect": "Allow",
+      "Action": "sqs:SendMessage",
+      "Resource": "arn:aws:sqs:us-east-1:<ACCOUNT_ID>:fleetops_driver_dlq"
+    }
+  ]
+}
+```
+
+El servicio no usa `AWS_ACCESS_KEY_ID` ni `AWS_SECRET_ACCESS_KEY`: el SDK toma las credenciales del
+perfil de instancia (rol IAM).
+
+### Security group de la EC2
+
+| Puerto | Protocolo | Fuente | Nota |
+| :--- | :--- | :--- | :--- |
+| 22 | TCP | IP del pipeline (SSH) | Acceso del workflow CD |
+| 8085 | TCP | `0.0.0.0/0` | **Temporal**: se restringe al API Gateway, servicios internos y Prometheus cuando el Gateway exista |
+
+### Elastic IP
+
+Se asignó una Elastic IP a la instancia para que la dirección no cambie al reiniciar. El secret
+`EC2_HOST` del pipeline apunta a esta IP.
+
+### Firestore de producción
+
+- Proyecto Firebase con Firestore en modo **Native**.
+- Cuenta de servicio con rol `Cloud Datastore User`.
+- Índices desplegados con `firebase deploy --only firestore:indexes --project <project-id>`.
+- El JSON de la cuenta de servicio está en la EC2 con permisos `600`, montado como volumen de solo
+  lectura, fuera del repositorio.
+
 ## Limitaciones conocidas a corregir/implementar en futuro cercano
 
 - La API responde `201 Created`, pero la especificación OpenAPI aún publica `200`; alinear el
