@@ -38,8 +38,8 @@ Compose las variables llegan al contenedor mediante `env_file`.
 | `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Prevista |
 | `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor (por ejemplo `-XX:MaxRAMPercentage=75.0`). | `-XX:MaxRAMPercentage=75.0` | Implementada |
 | `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | LocalStack local; ARN real en producción. | Implementada |
-| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | — | Prevista |
-| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | — | Prevista |
+| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | LocalStack local; URL real en producción. | Implementada |
+| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | LocalStack local; URL real en producción. | Implementada |
 | `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | Implementada |
 | `OUTBOX_BATCH_SIZE` | Máximo de eventos pendientes por ciclo del publicador. | `50` | Implementada |
 | `OUTBOX_PUBLISHER_ENABLED` | Habilita o deshabilita el publicador periódico. | `true` | Implementada |
@@ -132,11 +132,31 @@ curl -X POST http://localhost:8085/drivers \
 Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/info`, no
 `/actuator/*`.
 
-En `/metrics`, las métricas de publicación de eventos son:
+En `/metrics`, las métricas de eventos son:
 
+**Publicación (outbox):**
 - `fleetops_driver_events_published_total{event_type}`: eventos publicados y marcados `SENT`.
 - `fleetops_driver_event_publish_failures_total{event_type}`: intentos fallidos de publicación en SNS.
 - `fleetops_outbox_pending_events`: eventos que siguen pendientes en Firestore.
+
+**Consumo SQS (DEV_07-3):**
+- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed` o `duplicate`.
+- `drivers_events_dlq_total{event_type, reason}`: eventos enviados o derivados a la DLQ con `reason = invalid_message`, `driver_not_found` o `max_retries`.
+
+### Consumidor SQS (TEC_06)
+
+El consumidor escucha en la cola `fleetops_driver_queue` (conectada por suscripciones SNS a eventos
+de documentación e incidentes). Procesa:
+- `document_expired_event`: aplica bloqueo de documentos al conductor (`INACTIVE_EXPIRED_DOCUMENTS`).
+- `document_renewed_event`: retira el bloqueo de documentos (`ACTIVE`).
+- `severe_incident_reported_event`: aplica bloqueo médico (`MEDICAL_HOLD_INCIDENT`).
+
+Para garantizar **idempotencia**, cada evento procesado se registra en la colección `processed_events`
+usando su `event_id` como clave de documento. Si el evento ya fue procesado, se omite y se registra la
+métrica con `result=duplicate`. Si el mensaje es inválido o el conductor no existe, se deriva directamente a
+la DLQ (`fleetops_driver_dlq`). Ante fallos transitorios de infraestructura se propaga la excepción para
+que SQS active los reintentos automáticos hasta alcanzar `maxReceiveCount = 3`, momento en el cual la redrive
+policy traslada el mensaje a la DLQ.
 
 ## Firestore
 

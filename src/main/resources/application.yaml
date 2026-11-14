@@ -21,6 +21,9 @@ app:
     timeout: ${FIRESTORE_TIMEOUT:2s}
   messaging:
     driver-events-topic-arn: "${FLEETOPS_DRIVER_TOPIC_ARN:arn:aws:sns:us-east-1:000000000000:fleetops_driver_events}"
+    driver-queue: "${FLEETOPS_DRIVER_QUEUE_URL:fleetops_driver_queue}"
+    driver-dlq-url: "${FLEETOPS_DRIVER_DLQ_URL:fleetops_driver_dlq}"
+    consumer-enabled: ${FLEETOPS_CONSUMER_ENABLED:true}
   outbox:
     publish-interval-ms: ${OUTBOX_PUBLISH_INTERVAL_MS:2000}
     batch-size: ${OUTBOX_BATCH_SIZE:50}

@@ -2,15 +2,19 @@ package co.edu.univalle.conductores.config;
 
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
+import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
+import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.application.port.out.EventMetricsPort;
 import co.edu.univalle.conductores.application.port.out.EventPublisherPort;
 import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
+import co.edu.univalle.conductores.application.port.out.ProcessedEventRepositoryPort;
 import co.edu.univalle.conductores.application.service.GetDriverService;
 import co.edu.univalle.conductores.application.service.ListDriverService;
 import co.edu.univalle.conductores.application.service.OutboxPublisher;
+import co.edu.univalle.conductores.application.service.ProcessDriverEventService;
 import co.edu.univalle.conductores.application.service.RegisterDriverService;
 import co.edu.univalle.conductores.application.service.UpdateDriverService;
 import java.time.Clock;
@@ -38,7 +42,7 @@ public class DriverServiceConfig {
      * Caso de uso de registro.
      *
      * @param repository repositorio de conductores
-     * @param clock reloj del proyecto
+     * @param clock      reloj del proyecto
      * @return implementación de RegisterDriver
      */
     @Bean
@@ -72,7 +76,7 @@ public class DriverServiceConfig {
      * Caso de uso de actualización.
      *
      * @param repository repositorio de conductores
-     * @param clock reloj del proyecto
+     * @param clock      reloj del proyecto
      * @return implementación de UpdateDriver
      */
     @Bean
@@ -84,7 +88,7 @@ public class DriverServiceConfig {
      * Creates the outbox publication service.
      *
      * @param outboxRepository repository for pending events
-     * @param eventPublisher SNS publication port
+     * @param eventPublisher   SNS publication port
      * @return outbox publisher
      */
     @Bean
@@ -93,5 +97,21 @@ public class DriverServiceConfig {
             EventPublisherPort eventPublisher,
             EventMetricsPort eventMetrics) {
         return new OutboxPublisher(outboxRepository, eventPublisher, eventMetrics);
+    }
+
+    /**
+     * Caso de uso para procesar eventos asíncronos de conductores.
+     *
+     * @param driverRepository         repositorio de conductores
+     * @param processedEventRepository repositorio de eventos procesados
+     * @param consumerMetrics          métricas de consumo
+     * @return implementación de ProcessDriverEvent
+     */
+    @Bean
+    public ProcessDriverEvent processDriverEvent(
+            DriverRepository driverRepository,
+            ProcessedEventRepositoryPort processedEventRepository,
+            ConsumerMetricsPort consumerMetrics) {
+        return new ProcessDriverEventService(driverRepository, processedEventRepository, consumerMetrics);
     }
 }

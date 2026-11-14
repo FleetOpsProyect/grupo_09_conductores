@@ -124,7 +124,7 @@ class DriverTest {
     void updateRejectsInvalidDataAndKeepsOriginalValues() {
         Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", null, NOW);
 
-        assertThatThrownBy(() -> driver.update("Carlos", "correo-malo", null, NOW.plusHours(1)))
+        assertThatThrownBy(() -> driver.update("Carlos", "correo-malo", (String) null, NOW.plusHours(1)))
                 .isInstanceOf(InvalidDriverException.class);
         assertThat(driver.getEmail()).isEqualTo("carlos@correo.com");
         assertThat(driver.getUpdatedAt()).isEqualTo(NOW);
@@ -143,6 +143,34 @@ class DriverTest {
     @Test
     void medicalBlockHasPriorityOverDocumentBlock() {
         assertThat(restored(true, true).getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+    }
+
+    @Test
+    void applyAndRemoveDocumentBlockChangesStatus() {
+        Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", null, NOW);
+        OffsetDateTime later = NOW.plusHours(1);
+
+        driver.applyDocumentBlock(later);
+        assertThat(driver.isDocumentBlock()).isTrue();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        assertThat(driver.getUpdatedAt()).isEqualTo(later);
+
+        OffsetDateTime renewedAt = later.plusHours(2);
+        driver.removeDocumentBlock(renewedAt);
+        assertThat(driver.isDocumentBlock()).isFalse();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
+        assertThat(driver.getUpdatedAt()).isEqualTo(renewedAt);
+    }
+
+    @Test
+    void applyMedicalBlockChangesStatusToMedicalHold() {
+        Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", null, NOW);
+        OffsetDateTime later = NOW.plusHours(1);
+
+        driver.applyMedicalBlock(later);
+        assertThat(driver.isMedicalBlock()).isTrue();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+        assertThat(driver.getUpdatedAt()).isEqualTo(later);
     }
 
     private static Driver restored(boolean documentBlock, boolean medicalBlock) {
