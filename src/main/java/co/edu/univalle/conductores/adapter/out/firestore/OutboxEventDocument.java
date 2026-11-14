@@ -1,5 +1,11 @@
 package co.edu.univalle.conductores.adapter.out.firestore;
 
+import co.edu.univalle.conductores.application.event.OutboxEvent;
+import com.google.cloud.Timestamp;
+import java.util.Map;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+
 /**
  * Names of the outbox_events collection, its fields and status values in Firestore.
  *
@@ -37,6 +43,32 @@ final class OutboxEventDocument {
 
     /** Status of an event already published to the broker. */
     static final String STATUS_SENT = "SENT";
+
+    /**
+     * Convierte un evento del outbox al formato almacenado en Firestore.
+     *
+     * @param outboxEvent evento que se guardará
+     * @param objectMapper mapper configurado por Spring
+     * @return campos del documento
+     */
+    static Map<String, Object> fromDomain(OutboxEvent outboxEvent, JsonMapper jsonMapper) {
+        String payload;
+        try {
+            payload = jsonMapper.writeValueAsString(outboxEvent.envelope());
+        } catch (JacksonException ex) {
+            throw new IllegalStateException("No se pudo serializar el evento del outbox", ex);
+        }
+
+        return Map.of(
+                EVENT_ID, outboxEvent.envelope().eventId().toString(),
+                EVENT_TYPE, outboxEvent.envelope().eventType(),
+                PAYLOAD, payload,
+                STATUS, outboxEvent.status().name(),
+                CREATED_AT, Timestamp.ofTimeSecondsAndNanos(
+                        outboxEvent.envelope().occurredAt().toEpochSecond(),
+                        outboxEvent.envelope().occurredAt().getNano()),
+                ATTEMPTS, outboxEvent.attempts());
+    }
 
     private OutboxEventDocument() {
     }

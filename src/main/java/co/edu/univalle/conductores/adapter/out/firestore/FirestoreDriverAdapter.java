@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.adapter.out.firestore;
 
+import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
@@ -28,6 +29,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Outbound adapter: implements {@link DriverRepository} with Firestore.
@@ -40,7 +42,6 @@ import java.util.concurrent.TimeoutException;
 public class FirestoreDriverAdapter implements DriverRepository {
 
     private static final String DOCUMENT_NUMBERS = "document_numbers";
-
     private static final Set<StatusCode.Code> TRANSIENT_CODES = EnumSet.of(
             StatusCode.Code.UNAVAILABLE,
             StatusCode.Code.DEADLINE_EXCEEDED,
@@ -51,30 +52,45 @@ public class FirestoreDriverAdapter implements DriverRepository {
             StatusCode.Code.UNKNOWN);
 
     private final Firestore firestore;
-
     private final Duration timeout;
+    private final JsonMapper jsonMapper;
 
     /**
      * Creates the adapter.
      *
      * @param firestore Firestore client
      * @param timeout maximum time a request waits for Firestore
+    * @param objectMapper mapper configured by Spring
      */
-    public FirestoreDriverAdapter(Firestore firestore, Duration timeout) {
+    public FirestoreDriverAdapter(Firestore firestore, Duration timeout, JsonMapper jsonMapper) {
         this.firestore = firestore;
         this.timeout = Objects.requireNonNull(timeout, "timeout");
+        this.jsonMapper = Objects.requireNonNull(jsonMapper, "jsonMapper");
     }
 
+    /**
+     * Guarda el conductor, reserva su número de documento y registra el evento
+     * del outbox en una sola transacción.
+     *
+     * @param driver conductor a crear
+     * @param outboxEvent evento que se publicará después del registro
+     */
     @Override
-    public void createWithUniqueness(Driver driver) {
+    public void createWithUniquenessAndOutbox(Driver driver, OutboxEvent outboxEvent) {
         String documentNumber = driver.getDocumentNumber();
+        DocumentReference driverRef = drivers().document(driver.getId().toString());
+        DocumentReference outboxRef = firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(outboxEvent.envelope().eventId().toString());
+
         await(firestore.runTransaction(transaction -> {
             DocumentReference numberRef = firestore.collection(DOCUMENT_NUMBERS).document(documentNumber);
             if (transaction.get(numberRef).get().exists()) {
                 throw new DuplicateDocumentException(documentNumber);
             }
+
             transaction.set(numberRef, Map.of("driver_id", driver.getId().toString()));
-            transaction.set(drivers().document(driver.getId().toString()), DriverDocument.fromDomain(driver));
+            transaction.set(driverRef, DriverDocument.fromDomain(driver));
+            transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
             return null;
         }));
     }

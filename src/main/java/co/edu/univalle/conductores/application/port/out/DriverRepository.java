@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.application.port.out;
 
+import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
@@ -12,12 +13,13 @@ import java.util.UUID;
 public interface DriverRepository {
 
     /**
-     * Guarda un conductor nuevo y reserva su número de documento en una sola transacción.
+     * Guarda el conductor, reserva su número de documento y registra el evento
+     * del outbox en una sola transacción.
      *
      * @param driver conductor a crear
-     * @throws co.edu.univalle.conductores.domain.DuplicateDocumentException si el documento ya existe
+     * @param outboxEvent evento que se publicará después del registro
      */
-    void createWithUniqueness(Driver driver);
+    void createWithUniquenessAndOutbox(Driver driver, OutboxEvent outboxEvent);
 
     /**
      * Actualiza un conductor existente.

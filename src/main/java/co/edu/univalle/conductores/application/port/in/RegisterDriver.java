@@ -1,6 +1,7 @@
 package co.edu.univalle.conductores.application.port.in;
 
 import co.edu.univalle.conductores.domain.Driver;
+import java.util.UUID;
 
 /**
  * Puerto de entrada: registrar un conductor nuevo.
@@ -22,7 +23,13 @@ public interface RegisterDriver {
      * @param documentNumber número de documento
      * @param email correo electrónico
      * @param phone teléfono opcional
+     * @param correlationId identificador de correlación de la operación HTTP
      */
-    record Command(String fullName, String documentNumber, String email, String phone) {
+    record Command(
+            String fullName,
+            String documentNumber,
+            String email,
+            String phone,
+            UUID correlationId) {
     }
 }
