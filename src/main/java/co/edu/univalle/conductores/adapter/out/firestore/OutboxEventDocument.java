@@ -1,5 +1,13 @@
 package co.edu.univalle.conductores.adapter.out.firestore;
 
+import co.edu.univalle.conductores.application.event.EventEnvelope;
+import co.edu.univalle.conductores.application.event.OutboxEvent;
+import com.google.cloud.Timestamp;
+import java.util.Map;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
+
 /**
  * Names of the outbox_events collection, its fields and status values in Firestore.
  *
@@ -37,6 +45,56 @@ final class OutboxEventDocument {
 
     /** Status of an event already published to the broker. */
     static final String STATUS_SENT = "SENT";
+
+    /**
+     * Convierte un evento del outbox al formato almacenado en Firestore.
+     *
+     * @param outboxEvent evento que se guardará
+    * @param jsonMapper mapper configurado por Spring
+     * @return campos del documento
+     */
+    static Map<String, Object> fromDomain(OutboxEvent outboxEvent, JsonMapper jsonMapper) {
+        String payload;
+        try {
+            payload = jsonMapper.writeValueAsString(outboxEvent.envelope());
+        } catch (JacksonException ex) {
+            throw new IllegalStateException("No se pudo serializar el evento del outbox", ex);
+        }
+
+        return Map.of(
+                EVENT_ID, outboxEvent.envelope().eventId().toString(),
+                EVENT_TYPE, outboxEvent.envelope().eventType(),
+                PAYLOAD, payload,
+                STATUS, outboxEvent.status().name(),
+                CREATED_AT, Timestamp.ofTimeSecondsAndNanos(
+                        outboxEvent.envelope().occurredAt().toEpochSecond(),
+                        outboxEvent.envelope().occurredAt().getNano()),
+                ATTEMPTS, outboxEvent.attempts());
+    }
+
+    /**
+     * Reconstruye un evento del outbox desde Firestore.
+     *
+     * @param data campos almacenados en el documento
+     * @param jsonMapper mapper configurado por Spring
+     * @return evento reconstruido
+     */
+    static OutboxEvent toDomain(Map<String, Object> data, JsonMapper jsonMapper) {
+        EventEnvelope<Map<String, Object>> envelope;
+        try {
+            envelope = jsonMapper.readValue(
+                    (String) data.get(PAYLOAD),
+                    new TypeReference<EventEnvelope<Map<String, Object>>>() { });
+        } catch (JacksonException ex) {
+            throw new IllegalStateException("No se pudo deserializar el evento del outbox", ex);
+        }
+
+        Number attempts = (Number) data.get(ATTEMPTS);
+        return new OutboxEvent(
+                envelope,
+                OutboxEvent.Status.valueOf((String) data.get(STATUS)),
+                attempts.intValue());
+    }
 
     private OutboxEventDocument() {
     }

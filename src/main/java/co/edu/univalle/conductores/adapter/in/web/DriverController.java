@@ -31,6 +31,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -100,10 +101,16 @@ public class DriverController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping
-    public ResponseEntity<DriverResponse> register(@Valid @RequestBody RegisterDriverRequest request) {
+    public ResponseEntity<DriverResponse> register(
+            @RequestHeader(value = "X-Correlation-Id", required = false) String correlationIdHeader,
+            @Valid @RequestBody RegisterDriverRequest request) {
+        UUID correlationId = resolveCorrelationId(correlationIdHeader);
         Driver driver = registerDriver.register(new RegisterDriver.Command(
-                request.fullName(), request.documentNumber(), request.email(), request.phone()));
-        return ResponseEntity.status(HttpStatus.CREATED).body(DriverResponse.from(driver));
+                request.fullName(), request.documentNumber(), request.email(), request.phone(), correlationId));
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .header("X-Correlation-Id", correlationId.toString())
+                .body(DriverResponse.from(driver));
     }
 
     /**
@@ -234,5 +241,12 @@ public class DriverController {
             throw new DriverNotFoundException(id);
         }
         return UUID.fromString(id);
+    }
+
+    private static UUID resolveCorrelationId(String correlationIdHeader) {
+        if (correlationIdHeader == null || !UUID_PATTERN.matcher(correlationIdHeader).matches()) {
+            return UUID.randomUUID();
+        }
+        return UUID.fromString(correlationIdHeader);
     }
 }

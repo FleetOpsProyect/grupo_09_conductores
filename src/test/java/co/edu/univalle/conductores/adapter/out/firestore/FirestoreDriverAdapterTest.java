@@ -11,6 +11,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
+import co.edu.univalle.conductores.application.event.DriverEventType;
+import co.edu.univalle.conductores.application.event.EventEnvelope;
+import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
@@ -45,6 +49,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Unit tests of the Firestore failure translation (TEC_04-4), with the SDK mocked.
@@ -73,15 +78,23 @@ class FirestoreDriverAdapterTest {
     @Mock
     private AggregateQuery countQuery;
 
+    @Mock
+    private CollectionReference outboxEvents;
+
+    @Mock
+    private DocumentReference outboxDocument;
+
     private static final Duration TIMEOUT = Duration.ofSeconds(2);
 
     private ApiFuture<QuerySnapshot> pageFuture;
 
     private FirestoreDriverAdapter adapter;
 
+    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
+
     @BeforeEach
     void setUp() {
-        adapter = new FirestoreDriverAdapter(firestore, TIMEOUT);
+        adapter = new FirestoreDriverAdapter(firestore, TIMEOUT, JSON_MAPPER);
     }
 
     @ParameterizedTest
@@ -134,7 +147,7 @@ class FirestoreDriverAdapterTest {
     @ParameterizedTest
     @EnumSource(Operation.class)
     void waitsAtMostTheConfiguredTimeout(Operation operation) throws Exception {
-        adapter = new FirestoreDriverAdapter(firestore, Duration.ofMillis(500));
+        adapter = new FirestoreDriverAdapter(firestore, Duration.ofMillis(500), JSON_MAPPER);
         ApiFuture<Object> future = stub(operation);
         when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenThrow(new TimeoutException());
         ArgumentCaptor<Long> timeout = ArgumentCaptor.forClass(Long.class);
@@ -268,8 +281,14 @@ class FirestoreDriverAdapterTest {
     private ApiFuture<Object> stub(Operation operation) {
         ApiFuture<Object> future = mock(ApiFuture.class);
         switch (operation) {
-            case CREATE -> when(firestore.runTransaction(any(Transaction.Function.class)))
-                    .thenReturn((ApiFuture) future);
+            case CREATE -> {
+                when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
+                when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+                when(firestore.collection(OutboxEventDocument.COLLECTION)).thenReturn(outboxEvents);
+                when(outboxEvents.document(any(String.class))).thenReturn(outboxDocument);
+                when(firestore.runTransaction(any(Transaction.Function.class)))
+                        .thenReturn((ApiFuture) future);
+            }
             case FIND_BY_ID -> {
                 stubDocument();
                 when(document.get()).thenReturn((ApiFuture) future);
@@ -304,7 +323,7 @@ class FirestoreDriverAdapterTest {
 
     private void invoke(Operation operation) {
         switch (operation) {
-            case CREATE -> adapter.createWithUniqueness(DRIVER);
+            case CREATE -> adapter.createWithUniquenessAndOutbox(DRIVER, pendingActivationEvent());
             case FIND_BY_ID -> adapter.findById(DRIVER.getId());
             case SAVE -> adapter.save(DRIVER);
             case FIND_ALL -> adapter.findAll(null, 0, 10);
@@ -314,5 +333,17 @@ class FirestoreDriverAdapterTest {
     private static ApiException apiException(Status.Code code) {
         return ApiExceptionFactory.createException(new RuntimeException("sdk detail " + UUID.randomUUID()),
                 GrpcStatusCode.of(code), false);
+    }
+
+    private static OutboxEvent pendingActivationEvent() {
+        EventEnvelope<DriverActivatedPayload> envelope = new EventEnvelope<>(
+                UUID.randomUUID(),
+                DriverEventType.DRIVER_ACTIVATED.value(),
+                DRIVER.getCreatedAt(),
+                "driver",
+                UUID.randomUUID(),
+                new DriverActivatedPayload(DRIVER.getId(), DRIVER.getFullName()));
+
+        return OutboxEvent.pending(envelope);
     }
 }

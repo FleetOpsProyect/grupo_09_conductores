@@ -19,6 +19,12 @@ app:
     emulator-host: ${FIREBASE_EMULATOR_HOST:}
   firestore:
     timeout: ${FIRESTORE_TIMEOUT:2s}
+  messaging:
+    driver-events-topic-arn: "${FLEETOPS_DRIVER_TOPIC_ARN:arn:aws:sns:us-east-1:000000000000:fleetops_driver_events}"
+  outbox:
+    publish-interval-ms: ${OUTBOX_PUBLISH_INTERVAL_MS:2000}
+    batch-size: ${OUTBOX_BATCH_SIZE:50}
+    publisher-enabled: ${OUTBOX_PUBLISHER_ENABLED:true}
 
 springdoc:
   api-docs:

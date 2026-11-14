@@ -5,8 +5,12 @@ import co.edu.univalle.conductores.application.port.in.ListDriver;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
+import co.edu.univalle.conductores.application.port.out.EventMetricsPort;
+import co.edu.univalle.conductores.application.port.out.EventPublisherPort;
+import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
 import co.edu.univalle.conductores.application.service.GetDriverService;
 import co.edu.univalle.conductores.application.service.ListDriverService;
+import co.edu.univalle.conductores.application.service.OutboxPublisher;
 import co.edu.univalle.conductores.application.service.RegisterDriverService;
 import co.edu.univalle.conductores.application.service.UpdateDriverService;
 import java.time.Clock;
@@ -74,5 +78,20 @@ public class DriverServiceConfig {
     @Bean
     public UpdateDriver updateDriver(DriverRepository repository, Clock clock) {
         return new UpdateDriverService(repository, clock);
+    }
+
+    /**
+     * Creates the outbox publication service.
+     *
+     * @param outboxRepository repository for pending events
+     * @param eventPublisher SNS publication port
+     * @return outbox publisher
+     */
+    @Bean
+    public OutboxPublisher outboxPublisher(
+            OutboxRepositoryPort outboxRepository,
+            EventPublisherPort eventPublisher,
+            EventMetricsPort eventMetrics) {
+        return new OutboxPublisher(outboxRepository, eventPublisher, eventMetrics);
     }
 }
