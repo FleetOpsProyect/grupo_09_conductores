@@ -8,6 +8,14 @@ import java.util.UUID;
  * Puerto de salida para consultar y actualizar eventos del outbox.
  */
 public interface OutboxRepositoryPort {
+
+    /**
+     * Counts all events that are still pending publication.
+     *
+     * @return number of pending events
+     */
+    long countPending();
+
     /**
      * Busca eventos pendientes, ordenados por fecha de creación.
      *

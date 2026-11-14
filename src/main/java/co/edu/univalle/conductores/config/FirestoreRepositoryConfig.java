@@ -1,7 +1,6 @@
 package co.edu.univalle.conductores.config;
 
 import co.edu.univalle.conductores.adapter.out.firestore.FirestoreDriverAdapter;
-import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import com.google.cloud.firestore.Firestore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,7 +21,7 @@ public class FirestoreRepositoryConfig {
      * @return DriverRepository implementation
      */
     @Bean
-    public DriverRepository driverRepository(
+    public FirestoreDriverAdapter driverRepository(
             Firestore firestore,
             FirestoreProperties properties,
             JsonMapper jsonMapper) {

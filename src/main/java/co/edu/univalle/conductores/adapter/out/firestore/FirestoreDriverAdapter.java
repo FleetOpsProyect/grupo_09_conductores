@@ -2,6 +2,7 @@ package co.edu.univalle.conductores.adapter.out.firestore;
 
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
+import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
@@ -14,6 +15,7 @@ import com.google.cloud.firestore.AggregateQuerySnapshot;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
+import com.google.cloud.firestore.FieldValue;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
@@ -39,7 +41,7 @@ import tools.jackson.databind.json.JsonMapper;
  * {@link IllegalStateException}. No SDK exception type leaves this class. This class does not log: the
  * web layer logs the failure once.
  */
-public class FirestoreDriverAdapter implements DriverRepository {
+public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositoryPort {
 
     private static final String DOCUMENT_NUMBERS = "document_numbers";
     private static final Set<StatusCode.Code> TRANSIENT_CODES = EnumSet.of(
@@ -60,7 +62,7 @@ public class FirestoreDriverAdapter implements DriverRepository {
      *
      * @param firestore Firestore client
      * @param timeout maximum time a request waits for Firestore
-    * @param objectMapper mapper configured by Spring
+        * @param jsonMapper mapper configured by Spring
      */
     public FirestoreDriverAdapter(Firestore firestore, Duration timeout, JsonMapper jsonMapper) {
         this.firestore = firestore;
@@ -93,6 +95,62 @@ public class FirestoreDriverAdapter implements DriverRepository {
             transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
             return null;
         }));
+    }
+
+    /**
+     * Finds pending outbox events in creation order.
+     *
+     * @param limit maximum number of events to return
+     * @return pending outbox events
+     */
+    @Override
+    public List<OutboxEvent> findPending(int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit debe ser mayor que cero");
+        }
+        Query query = outboxEvents()
+                .whereEqualTo(OutboxEventDocument.STATUS, OutboxEventDocument.STATUS_PENDING)
+                .orderBy(OutboxEventDocument.CREATED_AT)
+                .limit(limit);
+        return await(query.get()).getDocuments().stream()
+                .map(document -> OutboxEventDocument.toDomain(document.getData(), jsonMapper))
+                .toList();
+    }
+
+    /**
+     * Counts all pending outbox events.
+     *
+     * @return number of pending events
+     */
+    @Override
+    public long countPending() {
+        return await(outboxEvents()
+                .whereEqualTo(OutboxEventDocument.STATUS, OutboxEventDocument.STATUS_PENDING)
+                .count()
+                .get())
+                .getCount();
+    }
+
+    /**
+     * Marks an SNS-confirmed event as sent.
+     *
+     * @param eventId identifier of the event
+     */
+    @Override
+    public void markAsSent(UUID eventId) {
+        await(outboxEvents().document(eventId.toString()).update(
+                OutboxEventDocument.STATUS, OutboxEventDocument.STATUS_SENT));
+    }
+
+    /**
+     * Increments the failed publication attempts of an event.
+     *
+     * @param eventId identifier of the event
+     */
+    @Override
+    public void recordPublishFailure(UUID eventId) {
+        await(outboxEvents().document(eventId.toString()).update(
+                OutboxEventDocument.ATTEMPTS, FieldValue.increment(1)));
     }
 
     @Override
@@ -137,6 +195,10 @@ public class FirestoreDriverAdapter implements DriverRepository {
 
     private CollectionReference drivers() {
         return firestore.collection(DriverDocument.COLLECTION);
+    }
+
+    private CollectionReference outboxEvents() {
+        return firestore.collection(OutboxEventDocument.COLLECTION);
     }
 
     private long deadline() {

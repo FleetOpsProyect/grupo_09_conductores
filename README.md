@@ -37,10 +37,12 @@ Compose las variables llegan al contenedor mediante `env_file`.
 | `AWS_SECRET_ACCESS_KEY` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Prevista |
 | `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Prevista |
 | `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor (por ejemplo `-XX:MaxRAMPercentage=75.0`). | `-XX:MaxRAMPercentage=75.0` | Implementada |
-| `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | — | Prevista |
+| `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | LocalStack local; ARN real en producción. | Implementada |
 | `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | — | Prevista |
 | `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | — | Prevista |
-| `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | Prevista |
+| `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | Implementada |
+| `OUTBOX_BATCH_SIZE` | Máximo de eventos pendientes por ciclo del publicador. | `50` | Implementada |
+| `OUTBOX_PUBLISHER_ENABLED` | Habilita o deshabilita el publicador periódico. | `true` | Implementada |
 | `DOCUMENTACION_URL` | URL del servicio de Documentación. | — | Prevista |
 | `DOCUMENTACION_TIMEOUT_MS` | Timeout hacia Documentación. | `2000` (2 s) | Prevista |
 | `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES` | Fallos consecutivos para abrir el Circuit Breaker. | `5` | Prevista |
@@ -50,9 +52,9 @@ Compose las variables llegan al contenedor mediante `env_file`.
 | `IMAGE_NAME` | Nombre de la imagen Docker. | `ms-conductores` | Infra |
 | `IMAGE_TAG` | Etiqueta de la imagen (SHA corto del commit en CD; `latest` solo en main). | `latest` | Infra |
 
-Las variables marcadas como *Prevista* documentan valores que el código todavía no lee: la
-integración con Documentación, el Circuit Breaker y el outbox de eventos están pendientes de
-implementar. Ninguno de estos valores está escrito a mano en el código.
+Las variables marcadas como *Prevista* documentan integraciones pendientes, como el consumo SQS,
+Documentación y el Circuit Breaker. El publisher SNS usa el outbox de Firestore: guarda el evento
+con el conductor y publica los pendientes de forma periódica.
 
 En producción `GOOGLE_APPLICATION_CREDENTIALS` apunta a `/secrets/firebase-adminsdk.json` (dentro
 del contenedor) y el archivo se monta como volumen de solo lectura (ver
@@ -129,6 +131,12 @@ curl -X POST http://localhost:8085/drivers \
 
 Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/info`, no
 `/actuator/*`.
+
+En `/metrics`, las métricas de publicación de eventos son:
+
+- `fleetops_driver_events_published_total{event_type}`: eventos publicados y marcados `SENT`.
+- `fleetops_driver_event_publish_failures_total{event_type}`: intentos fallidos de publicación en SNS.
+- `fleetops_outbox_pending_events`: eventos que siguen pendientes en Firestore.
 
 ## Firestore
 

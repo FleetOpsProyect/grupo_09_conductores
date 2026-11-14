@@ -11,6 +11,7 @@ import co.edu.univalle.conductores.application.event.DriverEventType;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
+import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
@@ -27,6 +28,9 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private DriverRepository repository;
+
+    @Autowired
+    private OutboxRepositoryPort outboxRepository;
 
     @Autowired
     private Firestore firestore;
@@ -108,6 +112,35 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
                 .get()
                 .get();
         assertThat(secondOutbox.exists()).isFalse();
+    }
+
+    @Test
+    void pendingOutboxEventCanBeRetriedAndMarkedSent() throws Exception {
+        long pendingBefore = outboxRepository.countPending();
+        Driver driver = newDriver(uniqueDocument(), false);
+        OutboxEvent outboxEvent = createDriverWithOutbox(driver);
+        UUID eventId = outboxEvent.envelope().eventId();
+
+        assertThat(outboxRepository.findPending(10))
+                .extracting(event -> event.envelope().eventId())
+                .contains(eventId);
+        assertThat(outboxRepository.countPending()).isEqualTo(pendingBefore + 1);
+
+        outboxRepository.recordPublishFailure(eventId);
+        DocumentSnapshot failedAttempt = firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(eventId.toString())
+                .get()
+                .get();
+        assertThat(failedAttempt.getLong(OutboxEventDocument.ATTEMPTS)).isEqualTo(1L);
+        assertThat(failedAttempt.getString(OutboxEventDocument.STATUS))
+                .isEqualTo(OutboxEventDocument.STATUS_PENDING);
+
+        outboxRepository.markAsSent(eventId);
+
+        assertThat(outboxRepository.findPending(10))
+                .extracting(event -> event.envelope().eventId())
+                .doesNotContain(eventId);
+        assertThat(outboxRepository.countPending()).isEqualTo(pendingBefore);
     }
 
     private OutboxEvent createDriverWithOutbox(Driver driver) {
