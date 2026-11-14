@@ -50,6 +50,7 @@ public abstract class BaseIntegrationTest {
      *
      * @return a new, unstarted emulator container
      */
+    @SuppressWarnings("resource")
     protected static GenericContainer<?> newFirestoreEmulator() {
         return new GenericContainer<>(
                 DockerImageName.parse("gcr.io/google.com/cloudsdktool/google-cloud-cli:590.0.1-emulators"))

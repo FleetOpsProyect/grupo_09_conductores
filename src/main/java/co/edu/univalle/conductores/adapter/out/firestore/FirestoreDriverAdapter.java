@@ -3,6 +3,7 @@ package co.edu.univalle.conductores.adapter.out.firestore;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
+import co.edu.univalle.conductores.application.port.out.ProcessedEventRepositoryPort;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
@@ -41,7 +42,7 @@ import tools.jackson.databind.json.JsonMapper;
  * {@link IllegalStateException}. No SDK exception type leaves this class. This class does not log: the
  * web layer logs the failure once.
  */
-public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositoryPort {
+public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositoryPort, ProcessedEventRepositoryPort {
 
     private static final String DOCUMENT_NUMBERS = "document_numbers";
     private static final Set<StatusCode.Code> TRANSIENT_CODES = EnumSet.of(
@@ -62,7 +63,7 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
      *
      * @param firestore Firestore client
      * @param timeout maximum time a request waits for Firestore
-        * @param jsonMapper mapper configured by Spring
+     * @param jsonMapper mapper configured by Spring
      */
     public FirestoreDriverAdapter(Firestore firestore, Duration timeout, JsonMapper jsonMapper) {
         this.firestore = firestore;
@@ -151,6 +152,28 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
     public void recordPublishFailure(UUID eventId) {
         await(outboxEvents().document(eventId.toString()).update(
                 OutboxEventDocument.ATTEMPTS, FieldValue.increment(1)));
+    }
+
+    @Override
+    public boolean isProcessed(UUID eventId) {
+        DocumentSnapshot snapshot = await(
+                firestore.collection(ProcessedEventDocument.COLLECTION)
+                        .document(eventId.toString())
+                        .get());
+        return snapshot.exists();
+    }
+
+    @Override
+    public void saveProcessed(UUID eventId, String eventType, UUID driverId) {
+        Map<String, Object> data = Map.of(
+                ProcessedEventDocument.EVENT_ID, eventId.toString(),
+                ProcessedEventDocument.EVENT_TYPE, eventType,
+                ProcessedEventDocument.DRIVER_ID, driverId.toString(),
+                ProcessedEventDocument.PROCESSED_AT, FieldValue.serverTimestamp());
+
+        await(firestore.collection(ProcessedEventDocument.COLLECTION)
+                .document(eventId.toString())
+                .set(data));
     }
 
     @Override

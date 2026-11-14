@@ -3,8 +3,6 @@ package co.edu.univalle.conductores.adapter.out.firestore;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.google.cloud.firestore.DocumentSnapshot;
-import com.google.cloud.firestore.Firestore;
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
 import co.edu.univalle.conductores.application.event.DriverEventType;
@@ -12,10 +10,13 @@ import co.edu.univalle.conductores.application.event.EventEnvelope;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
+import co.edu.univalle.conductores.application.port.out.ProcessedEventRepositoryPort;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
+import com.google.cloud.firestore.DocumentSnapshot;
+import com.google.cloud.firestore.Firestore;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -31,6 +32,9 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
 
     @Autowired
     private OutboxRepositoryPort outboxRepository;
+
+    @Autowired
+    private ProcessedEventRepositoryPort processedEventRepository;
 
     @Autowired
     private Firestore firestore;
@@ -51,7 +55,7 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
         Driver driver = newDriver(uniqueDocument(), false);
         createDriverWithOutbox(driver);
 
-        driver.update("Nombre Actualizado", "nuevo@correo.com", null, NOW.plusHours(1));
+        driver.update("Nombre Actualizado", "nuevo@correo.com", (String) null, NOW.plusHours(1));
         repository.save(driver);
 
         assertThat(repository.findById(driver.getId()).orElseThrow().getFullName())
@@ -141,6 +145,18 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
                 .extracting(event -> event.envelope().eventId())
                 .doesNotContain(eventId);
         assertThat(outboxRepository.countPending()).isEqualTo(pendingBefore);
+    }
+
+    @Test
+    void savesAndChecksProcessedEventForIdempotency() {
+        UUID eventId = UUID.randomUUID();
+        UUID driverId = UUID.randomUUID();
+
+        assertThat(processedEventRepository.isProcessed(eventId)).isFalse();
+
+        processedEventRepository.saveProcessed(eventId, "document_expired_event", driverId);
+
+        assertThat(processedEventRepository.isProcessed(eventId)).isTrue();
     }
 
     private OutboxEvent createDriverWithOutbox(Driver driver) {

@@ -20,7 +20,7 @@ public class UpdateDriverService implements UpdateDriver {
      * Crea el servicio con sus dependencias.
      *
      * @param repository puerto de persistencia de conductores
-     * @param clock reloj para la fecha de modificación
+     * @param clock      reloj para la fecha de modificación
      */
     public UpdateDriverService(DriverRepository repository, Clock clock) {
         this.repository = repository;
