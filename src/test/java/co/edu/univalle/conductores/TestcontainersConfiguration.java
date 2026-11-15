@@ -5,9 +5,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 /**
  * Contenedores auxiliares de las pruebas de integración.
  *
- * <p>Cuando se añadan las pruebas de mensajería SNS/SQS se debe registrar aquí un
- * {@code GenericContainer} con la imagen {@code localstack/localstack} exponiendo SNS y SQS,
- * y apuntar {@code spring.cloud.aws.endpoint} a la URL del contenedor.
+ * <p>LocalStack no se registra aquí: solo lo usa
+ * {@code DriverEventListenerLocalStackIntegrationTest}, que levanta su propio contenedor y apunta
+ * {@code spring.cloud.aws.endpoint} a él.
  */
 @TestConfiguration(proxyBeanMethods = false)
 class TestcontainersConfiguration {
