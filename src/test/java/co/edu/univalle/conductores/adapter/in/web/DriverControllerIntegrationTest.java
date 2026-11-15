@@ -7,12 +7,17 @@ import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.net.InetSocketAddress;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
@@ -372,6 +377,34 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(MAPPER.readTree(response.getBody()).get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+    
+    @Test
+    void getDriverMakesNoOutboundCallsAndReturnsNoLicenseData() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+            ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(outboundCalls.get()).isZero();
+
+            JsonNode body = MAPPER.readTree(response.getBody());
+            List<String> fields = new ArrayList<>();
+            body.fieldNames().forEachRemaining(fields::add);
+            assertThat(fields).containsExactlyInAnyOrder(
+                    "id", "full_name", "document_number", "email", "phone", "status", "created_at", "updated_at");
+        } finally {
+            simulatedExternalService.stop(0);
+        }
     }
 
     private ResponseEntity<String> register(String documentNumber) {
