@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
+import com.google.cloud.firestore.Firestore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -24,6 +25,7 @@ import java.time.temporal.ChronoUnit;
 import java.time.ZoneOffset;
 import java.net.InetSocketAddress;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -40,6 +42,9 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
     @MockitoSpyBean
     private DriverRepository driverRepository;
+
+    @Autowired
+    private Firestore firestore;
 
     @Test
     void registerReturns201WithSnakeCaseFields() throws Exception {
@@ -596,6 +601,129 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(MAPPER.readTree(second.getBody()).get("updated_at").asText())
                 .isEqualTo(MAPPER.readTree(first.getBody()).get("updated_at").asText());
         verify(driverRepository, never()).save(any());
+    }
+
+    @Test
+    void registerIgnoresStatusFieldAndReturnsActive() throws Exception {
+        String body = """
+                {"full_name":"Carlos Pérez","document_number":"%s","email":"carlos@correo.com",
+                 "phone":"3001234567","status":"INACTIVE_EXPIRED_DOCUMENTS"}
+                """.formatted(uniqueDocument());
+
+        ResponseEntity<String> response = post(body);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(MAPPER.readTree(response.getBody()).get("status").asText()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void registerResponseMatchesGetByIdOnSameFields() throws Exception {
+        JsonNode registered = MAPPER.readTree(register(uniqueDocument()).getBody());
+
+        ResponseEntity<String> fetched = client().get().uri("/{id}", registered.get("id").asText())
+                .retrieve()
+                .toEntity(String.class);
+        JsonNode found = MAPPER.readTree(fetched.getBody());
+
+        assertThat(fetched.getStatusCode()).isEqualTo(HttpStatus.OK);
+        for (String field : List.of("id", "full_name", "document_number", "email", "phone", "status")) {
+            assertThat(found.get(field)).isEqualTo(registered.get(field));
+        }
+    }
+
+    @Test
+    void registerTrimsDocumentNumberSpaces() throws Exception {
+        String documentNumber = uniqueDocument();
+        String body = """
+                {"full_name":"Carlos Pérez","document_number":"  %s  ","email":"carlos@correo.com","phone":"3001234567"}
+                """.formatted(documentNumber);
+
+        ResponseEntity<String> response = post(body);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(MAPPER.readTree(response.getBody()).get("document_number").asText()).isEqualTo(documentNumber);
+    }
+
+    @Test
+    void registerDocumentNumberWithLettersOrWrongLengthReturnsInvalidFormat() throws Exception {
+        for (String documentNumber : List.of("abc123", "12345", "12345678901")) {
+            ResponseEntity<String> response = register(documentNumber);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(fieldCodes(MAPPER.readTree(response.getBody())))
+                    .containsEntry("document_number", "INVALID_FORMAT");
+        }
+    }
+
+    @Test
+    void registerPhoneWithWrongPrefixReturnsInvalidFormat() throws Exception {
+        String body = """
+                {"full_name":"Carlos Pérez","document_number":"%s","email":"carlos@correo.com","phone":"2123456789"}
+                """.formatted(uniqueDocument());
+
+        ResponseEntity<String> response = post(body);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody()))).containsEntry("phone", "INVALID_FORMAT");
+    }
+
+    @Test
+    void registerWithoutPhoneReturns201WithoutPhone() throws Exception {
+        String body = """
+                {"full_name":"Carlos Pérez","document_number":"%s","email":"carlos@correo.com"}
+                """.formatted(uniqueDocument());
+
+        ResponseEntity<String> response = post(body);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(MAPPER.readTree(response.getBody()).hasNonNull("phone")).isFalse();
+    }
+
+    @Test
+    void registerDuplicateDocumentReturnsExactMessage() throws Exception {
+        String documentNumber = uniqueDocument();
+        register(documentNumber);
+
+        ResponseEntity<String> response = register(documentNumber);
+
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(body.get("code").asText()).isEqualTo("DUPLICATE_DRIVER");
+        assertThat(body.get("message").asText())
+                .isEqualTo("Ya existe un conductor con el documento de identidad " + documentNumber);
+    }
+
+    @Test
+    void registerWritesDriverActivatedEventToOutbox() throws Exception {
+        String driverId = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        var events = firestore.collection("outbox_events").get().get().getDocuments().stream()
+                .filter(event -> String.valueOf(event.getString("payload")).contains(driverId))
+                .toList();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getString("event_type")).isEqualTo("driver_activated_event");
+        assertThat(events.get(0).getString("status")).isIn("PENDING", "SENT");
+    }
+
+    @Test
+    void registerMakesNoOutboundCallsToDocumentacion() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            ResponseEntity<String> response = register(uniqueDocument());
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+            assertThat(outboundCalls.get()).isZero();
+        } finally {
+            simulatedExternalService.stop(0);
+        }
     }
 
     private ResponseEntity<String> register(String documentNumber) {
