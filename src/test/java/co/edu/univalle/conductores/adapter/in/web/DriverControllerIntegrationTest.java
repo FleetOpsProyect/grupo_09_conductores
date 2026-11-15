@@ -192,6 +192,22 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void getExistingDriverReturnsRequiredFields() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("id").asText()).isEqualTo(id);
+        assertThat(body.get("full_name").asText()).isNotBlank();
+        assertThat(body.get("document_number").asText()).isNotBlank();
+        assertThat(body.get("email").asText()).isNotBlank();
+        assertThat(body.has("phone")).isTrue();
+        assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
+    }
+
+    @Test
     void getUnknownDriverReturns404() throws Exception {
         UUID id = UUID.randomUUID();
 
