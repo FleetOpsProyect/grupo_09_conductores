@@ -487,6 +487,59 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listWithoutParametersUsesDefaultPageAndSize() throws Exception {
+        ResponseEntity<String> response = client().get().uri("").retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("page").asInt()).isZero();
+        assertThat(body.get("size").asInt()).isEqualTo(20);
+        assertThat(body.get("content").size()).isLessThanOrEqualTo(20);
+    }
+
+    @Test
+    void listOrdersByCreatedAtAscendingRegardlessOfInsertionOrder() throws Exception {
+        OffsetDateTime first = OffsetDateTime.of(2026, 1, 1, 10, 0, 0, 0, ZoneOffset.ofHours(-5));
+        OffsetDateTime second = first.plusDays(1);
+        OffsetDateTime third = first.plusDays(2);
+        UUID idThird = saveInactiveDriverCreatedAt(third);
+        UUID idFirst = saveInactiveDriverCreatedAt(first);
+        UUID idSecond = saveInactiveDriverCreatedAt(second);
+
+        String body = client().get().uri("?status=INACTIVE_EXPIRED_DOCUMENTS&size=100")
+                .retrieve().toEntity(String.class).getBody();
+
+        assertThat(idsIn(body)).containsSubsequence(idFirst.toString(), idSecond.toString(), idThird.toString());
+    }
+
+    @Test
+    void listElementsHaveTheSameFieldsAsGetById() throws Exception {
+        UUID id = seedDriver(false, true);
+
+        String body = client().get().uri("?status=MEDICAL_HOLD_INCIDENT&size=100")
+                .retrieve().toEntity(String.class).getBody();
+        JsonNode element = null;
+        for (JsonNode driver : MAPPER.readTree(body).get("content")) {
+            if (driver.get("id").asText().equals(id.toString())) {
+                element = driver;
+            }
+        }
+
+        assertThat(element).isNotNull();
+        List<String> fields = new ArrayList<>();
+        element.fieldNames().forEachRemaining(fields::add);
+        assertThat(fields).containsExactlyInAnyOrder(
+                "id", "full_name", "document_number", "email", "phone", "status", "created_at", "updated_at");
+    }
+
+    private UUID saveInactiveDriverCreatedAt(OffsetDateTime createdAt) {
+        UUID id = UUID.randomUUID();
+        driverRepository.save(Driver.restore(id, uniqueDocument(), "Carlos Pérez", "carlos@correo.com",
+                "3001234567", true, false, createdAt, createdAt));
+        return id;
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
