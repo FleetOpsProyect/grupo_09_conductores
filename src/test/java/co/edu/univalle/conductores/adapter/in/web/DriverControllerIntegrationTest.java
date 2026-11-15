@@ -237,6 +237,38 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
                 .isEqualTo("MEDICAL_HOLD_INCIDENT");
     }
 
+    @Test
+    void getDriverReturnsSameResponseWithOrWithoutAuthorizationHeader() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> withoutToken = client().get().uri("/{id}", id)
+                .retrieve().toEntity(String.class);
+
+        ResponseEntity<String> withToken = client().get().uri("/{id}", id)
+                .header("Authorization", "Bearer token-de-prueba")
+                .retrieve().toEntity(String.class);
+
+        assertThat(withToken.getStatusCode()).isEqualTo(withoutToken.getStatusCode());
+        assertThat(withToken.getBody()).isEqualTo(withoutToken.getBody());
+    }
+
+    @Test
+    void getUnknownDriverReturnsSameResponseWithOrWithoutAuthorizationHeader() throws Exception {
+        UUID id = UUID.randomUUID();
+
+        ResponseEntity<String> withoutToken = client().get().uri("/{id}", id)
+                .retrieve().toEntity(String.class);
+
+        ResponseEntity<String> withToken = client().get().uri("/{id}", id)
+                .header("Authorization", "Bearer token-de-prueba")
+                .retrieve().toEntity(String.class);
+
+        assertThat(withoutToken.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(withToken.getStatusCode()).isEqualTo(withoutToken.getStatusCode());
+        assertDriverNotFound(withoutToken, id.toString());
+        assertDriverNotFound(withToken, id.toString());
+    }
+
     private UUID seedDriver(boolean documentBlock, boolean medicalBlock) {
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.ofHours(-5));
