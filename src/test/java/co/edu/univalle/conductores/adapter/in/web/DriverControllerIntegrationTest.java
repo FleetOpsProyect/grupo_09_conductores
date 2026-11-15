@@ -379,6 +379,31 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listTotalCountsAllMatchingDriversNotOnlyCurrentPage() throws Exception {
+        long before = totalOf("status=MEDICAL_HOLD_INCIDENT");
+        seedDriver(false, true);
+        seedDriver(false, true);
+        seedDriver(false, true);
+
+        ResponseEntity<String> response = client().get()
+                .uri("?status=MEDICAL_HOLD_INCIDENT&size=2")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("content")).hasSize(2);
+        assertThat(body.get("page").asInt()).isZero();
+        assertThat(body.get("size").asInt()).isEqualTo(2);
+        assertThat(body.get("total").asLong()).isEqualTo(before + 3);
+    }
+
+    private long totalOf(String query) throws Exception {
+        ResponseEntity<String> response = client().get().uri("?" + query).retrieve().toEntity(String.class);
+        return MAPPER.readTree(response.getBody()).get("total").asLong();
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
