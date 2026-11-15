@@ -3,18 +3,23 @@ package co.edu.univalle.conductores.adapter.in.web;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import co.edu.univalle.conductores.BaseIntegrationTest;
+import co.edu.univalle.conductores.application.port.out.DriverRepository;
+import co.edu.univalle.conductores.domain.Driver;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestClient;
+import org.springframework.beans.factory.annotation.Autowired;
 
 class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
@@ -22,6 +27,9 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
     @LocalServerPort
     private int port;
+
+    @Autowired
+    private DriverRepository driverRepository;
 
     @Test
     void registerReturns201WithSnakeCaseFields() throws Exception {
@@ -205,6 +213,36 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(body.get("email").asText()).isNotBlank();
         assertThat(body.has("phone")).isTrue();
         assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void getDriverInactiveForExpiredDocumentsReturns200() throws Exception {
+        UUID id = seedDriver(true, false);
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("status").asText())
+                .isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+    }
+
+    @Test
+    void getDriverWithMedicalHoldReturns200() throws Exception {
+        UUID id = seedDriver(false, true);
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("status").asText())
+                .isEqualTo("MEDICAL_HOLD_INCIDENT");
+    }
+
+    private UUID seedDriver(boolean documentBlock, boolean medicalBlock) {
+        UUID id = UUID.randomUUID();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.ofHours(-5));
+        driverRepository.save(Driver.restore(id, uniqueDocument(), "Carlos Pérez", "carlos@correo.com",
+                "3001234567", documentBlock, medicalBlock, now, now));
+        return id;
     }
 
     @Test
