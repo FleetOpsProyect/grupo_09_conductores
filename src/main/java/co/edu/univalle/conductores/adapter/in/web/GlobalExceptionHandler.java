@@ -97,7 +97,7 @@ public class GlobalExceptionHandler {
                 .map(error -> new FieldError(fieldNames.resolve(target, error.getField()),
                         ValidationErrorCodes.fromConstraint(error.getCode())))
                 .toList();
-        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay datos inválidos en la solicitud",
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Los datos del conductor no son válidos",
                 request, ValidationErrorCodes.onePerField(errors));
     }
 
@@ -148,7 +148,7 @@ public class GlobalExceptionHandler {
         if (ex.getCause() instanceof MismatchedInputException mismatch && !mismatch.getPath().isEmpty()) {
             FieldError error = new FieldError(fieldNames.fromJacksonPath(mismatch.getPath()),
                     ValidationErrorCodes.fromTargetType(mismatch.getTargetType()));
-            return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay datos inválidos en la solicitud",
+            return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Los datos del conductor no son válidos",
                     request, List.of(error));
         }
         return build(HttpStatus.BAD_REQUEST, "INVALID_JSON", "El cuerpo de la solicitud no es un JSON válido",
