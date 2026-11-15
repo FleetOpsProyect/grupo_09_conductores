@@ -1,6 +1,10 @@
 package co.edu.univalle.conductores.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
@@ -23,8 +27,8 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.web.client.RestClient;
-import org.springframework.beans.factory.annotation.Autowired;
 
 class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
@@ -33,7 +37,7 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     @LocalServerPort
     private int port;
 
-    @Autowired
+    @MockitoSpyBean
     private DriverRepository driverRepository;
 
     @Test
@@ -405,6 +409,20 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         } finally {
             simulatedExternalService.stop(0);
         }
+    }
+
+    @Test
+    void twoConsecutiveGetsReturnSameBodyAndDoNotSave() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+        clearInvocations(driverRepository);
+
+        ResponseEntity<String> first = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+        ResponseEntity<String> second = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(first.getBody()).isEqualTo(second.getBody());
+        assertThat(MAPPER.readTree(second.getBody()).get("updated_at").asText())
+                .isEqualTo(MAPPER.readTree(first.getBody()).get("updated_at").asText());
+        verify(driverRepository, never()).save(any());
     }
 
     private ResponseEntity<String> register(String documentNumber) {
