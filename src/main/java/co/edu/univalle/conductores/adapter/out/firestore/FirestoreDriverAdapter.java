@@ -89,17 +89,20 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
         DocumentReference outboxRef = firestore.collection(OutboxEventDocument.COLLECTION)
                 .document(outboxEvent.envelope().eventId().toString());
 
-        await(firestore.runTransaction(transaction -> {
-            DocumentReference numberRef = firestore.collection(DOCUMENT_NUMBERS).document(documentNumber);
-            if (transaction.get(numberRef).get().exists()) {
+        try {
+            await(firestore.runTransaction(transaction -> {
+                DocumentReference numberRef = firestore.collection(DOCUMENT_NUMBERS).document(documentNumber);
+                transaction.create(numberRef, Map.of("driver_id", driver.getId().toString()));
+                transaction.set(driverRef, DriverDocument.fromDomain(driver));
+                transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
+                return null;
+            }));
+        } catch (IllegalStateException ex) {
+            if (isAlreadyExists(ex)) {
                 throw new DuplicateDocumentException(documentNumber);
             }
-
-            transaction.set(numberRef, Map.of("driver_id", driver.getId().toString()));
-            transaction.set(driverRef, DriverDocument.fromDomain(driver));
-            transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
-            return null;
-        }));
+            throw ex;
+        }
     }
 
     /**
@@ -258,6 +261,17 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
         } catch (ExecutionException ex) {
             throw translate(ex.getCause());
         }
+    }
+
+    /**
+     * Tells whether a failed Firestore call was rejected because the document already exists.
+     *
+     * @param failure exception translated from the SDK failure
+     * @return true when the cause is an ALREADY_EXISTS status
+     */
+    private static boolean isAlreadyExists(Throwable failure) {
+        ApiException api = findApiException(failure);
+        return api != null && api.getStatusCode().getCode() == StatusCode.Code.ALREADY_EXISTS;
     }
 
     /**
