@@ -228,6 +228,30 @@ class FirestoreDriverAdapterTest {
     }
 
     @Test
+    void nonDuplicateCreateSdkErrorIsNotReportedAsDuplicate() throws Exception {
+        ApiFuture<Object> future = stub(Operation.CREATE);
+        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS)))
+                .thenThrow(new ExecutionException(apiException(Status.Code.PERMISSION_DENIED)));
+
+        Throwable thrown = catchThrowable(() -> invoke(Operation.CREATE));
+
+        assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(DuplicateDocumentException.class);
+    }
+
+    @Test
+    void unknownCreateFailureIsNotReportedAsDuplicate() throws Exception {
+        ApiFuture<Object> future = stub(Operation.CREATE);
+        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS)))
+                .thenThrow(new ExecutionException(new RuntimeException("boom")));
+
+        Throwable thrown = catchThrowable(() -> invoke(Operation.CREATE));
+
+        assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(DuplicateDocumentException.class);
+    }
+
+    @Test
     void findByIdReturnsEmptyOnlyWhenFirestoreAnswersThatTheDocumentIsMissing() throws Exception {
         ApiFuture<Object> future = stub(Operation.FIND_BY_ID);
         DocumentSnapshot snapshot = mock(DocumentSnapshot.class);
