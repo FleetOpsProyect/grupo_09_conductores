@@ -170,6 +170,12 @@ class ErrorFormatIntegrationTest extends BaseIntegrationTest {
         assertErrorFormat(response, "SERVICE_UNAVAILABLE", "Servicio temporalmente no disponible, intente nuevamente",
                 "/drivers/" + id, false);
         assertThat(response.getBody()).doesNotContain("Exception", "at co.edu", "at com.google");
+
+        ResponseEntity<String> listResponse = get("/drivers?status=ACTIVE");
+
+        assertThat(listResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertErrorFormat(listResponse, "SERVICE_UNAVAILABLE",
+                "Servicio temporalmente no disponible, intente nuevamente", "/drivers", false);
     }
 
     /**
