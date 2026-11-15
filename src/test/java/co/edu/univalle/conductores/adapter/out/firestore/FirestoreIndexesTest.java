@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.BeforeAll;
@@ -51,8 +52,10 @@ class FirestoreIndexesTest {
                 ProcessedEventDocument.EVENT_ID,
                 ProcessedEventDocument.EVENT_TYPE,
                 ProcessedEventDocument.DRIVER_ID,
-                ProcessedEventDocument.PROCESSED_AT))
-                .containsExactly("event_id", "event_type", "driver_id", "processed_at");
+                ProcessedEventDocument.PROCESSED_AT,
+                ProcessedEventDocument.EXPIRE_AT))
+                .containsExactly("event_id", "event_type", "driver_id", "processed_at", "expire_at");
+        assertThat(ProcessedEventDocument.RETENTION).isEqualTo(Duration.ofDays(30));
     }
 
     @Test

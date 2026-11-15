@@ -102,16 +102,16 @@ public class DriverServiceConfig {
     /**
      * Caso de uso para procesar eventos asíncronos de conductores.
      *
-     * @param driverRepository         repositorio de conductores
-     * @param processedEventRepository repositorio de eventos procesados
+     * @param processedEventRepository repositorio que aplica cada evento una sola vez
      * @param consumerMetrics          métricas de consumo
+     * @param clock                    reloj de la aplicación
      * @return implementación de ProcessDriverEvent
      */
     @Bean
     public ProcessDriverEvent processDriverEvent(
-            DriverRepository driverRepository,
             ProcessedEventRepositoryPort processedEventRepository,
-            ConsumerMetricsPort consumerMetrics) {
-        return new ProcessDriverEventService(driverRepository, processedEventRepository, consumerMetrics);
+            ConsumerMetricsPort consumerMetrics,
+            Clock clock) {
+        return new ProcessDriverEventService(processedEventRepository, consumerMetrics, clock);
     }
 }
