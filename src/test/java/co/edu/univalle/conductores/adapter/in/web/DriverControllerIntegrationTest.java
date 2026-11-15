@@ -466,6 +466,27 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listWithoutValidUntilMakesNoOutboundCalls() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            ResponseEntity<String> response = client().get().uri("?status=ACTIVE&size=20")
+                    .retrieve().toEntity(String.class);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(outboundCalls.get()).isZero();
+        } finally {
+            simulatedExternalService.stop(0);
+        }
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
