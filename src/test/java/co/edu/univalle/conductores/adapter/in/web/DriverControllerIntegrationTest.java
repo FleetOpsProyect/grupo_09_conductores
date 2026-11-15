@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.time.ZoneOffset;
 import java.net.InetSocketAddress;
 import org.junit.jupiter.api.Test;
@@ -374,8 +375,8 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         JsonNode body = MAPPER.readTree(response.getBody());
         assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
         assertThat(body.get("errors")).hasSize(2);
-        assertThat(fieldCodes(body)).containsExactlyEntriesOf(
-                Map.of("size", "VALUE_NOT_ALLOWED", "page", "VALUE_NOT_ALLOWED"));
+        assertThat(fieldCodes(body))
+                .isEqualTo(Map.of("size", "VALUE_NOT_ALLOWED", "page", "VALUE_NOT_ALLOWED"));
     }
 
     @Test
@@ -401,6 +402,32 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     private long totalOf(String query) throws Exception {
         ResponseEntity<String> response = client().get().uri("?" + query).retrieve().toEntity(String.class);
         return MAPPER.readTree(response.getBody()).get("total").asLong();
+    }
+
+    @Test
+    void listReturnsSameOrderOnTwoCallsWhenCreatedAtIsEqual() throws Exception {
+        OffsetDateTime sameInstant = OffsetDateTime.now(ZoneOffset.ofHours(-5)).truncatedTo(ChronoUnit.MILLIS);
+        List<String> seededIds = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            UUID id = UUID.randomUUID();
+            seededIds.add(id.toString());
+            driverRepository.save(Driver.restore(id, uniqueDocument(), "Carlos Pérez", "carlos@correo.com",
+                    "3001234567", true, false, sameInstant, sameInstant));
+        }
+
+        String first = client().get().uri("?status=INACTIVE_EXPIRED_DOCUMENTS&size=100")
+                .retrieve().toEntity(String.class).getBody();
+        String second = client().get().uri("?status=INACTIVE_EXPIRED_DOCUMENTS&size=100")
+                .retrieve().toEntity(String.class).getBody();
+
+        assertThat(second).isEqualTo(first);
+        assertThat(idsIn(first)).containsAll(seededIds);
+    }
+
+    private List<String> idsIn(String listBody) throws Exception {
+        List<String> ids = new ArrayList<>();
+        MAPPER.readTree(listBody).get("content").forEach(driver -> ids.add(driver.get("id").asText()));
+        return ids;
     }
 
     @Test
