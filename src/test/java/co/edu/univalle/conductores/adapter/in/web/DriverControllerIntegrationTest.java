@@ -367,6 +367,18 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listWithSeveralInvalidParametersReturnsOneErrorPerParameter() throws Exception {
+        ResponseEntity<String> response = client().get().uri("?size=500&page=-1").retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(body.get("errors")).hasSize(2);
+        assertThat(fieldCodes(body)).containsExactlyEntriesOf(
+                Map.of("size", "VALUE_NOT_ALLOWED", "page", "VALUE_NOT_ALLOWED"));
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
