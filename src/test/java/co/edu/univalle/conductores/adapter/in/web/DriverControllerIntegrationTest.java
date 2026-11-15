@@ -451,6 +451,21 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listIncludesActiveDriverWithoutLicenseData() throws Exception {
+        UUID id = seedDriver(false, false);
+        long total = totalOf("status=ACTIVE&size=100");
+        int lastPage = (int) ((total - 1) / 100);
+
+        ResponseEntity<String> response = client().get()
+                .uri("?status=ACTIVE&size=100&page=" + lastPage)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(idsIn(response.getBody())).contains(id.toString());
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
