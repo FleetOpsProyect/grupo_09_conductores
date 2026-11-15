@@ -16,7 +16,12 @@ import com.sun.net.httpserver.HttpServer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -704,6 +709,9 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(events).hasSize(1);
         assertThat(events.get(0).getString("event_type")).isEqualTo("driver_activated_event");
         assertThat(events.get(0).getString("status")).isIn("PENDING", "SENT");
+        JsonNode data = MAPPER.readTree(events.get(0).getString("payload")).get("data");
+        assertThat(data.get("driver_id").asText()).isEqualTo(driverId);
+        assertThat(data.get("full_name").asText()).isEqualTo("Carlos Pérez");
     }
 
     @Test
@@ -724,6 +732,59 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         } finally {
             simulatedExternalService.stop(0);
         }
+    }
+
+    @Test
+    void registerSimultaneousSameDocumentReturnsOne201AndOne409() throws Exception {
+        String documentNumber = uniqueDocument();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<ResponseEntity<String>>> requests = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                requests.add(executor.submit(() -> {
+                    start.await();
+                    return register(documentNumber);
+                }));
+            }
+            start.countDown();
+
+            List<ResponseEntity<String>> responses = new ArrayList<>();
+            for (Future<ResponseEntity<String>> request : requests) {
+                responses.add(request.get(30, TimeUnit.SECONDS));
+            }
+            List<Integer> statuses = responses.stream().map(r -> r.getStatusCode().value()).toList();
+            assertThat(statuses)
+                    .as("respuestas: %s", responses.stream().map(ResponseEntity::getBody).toList())
+                    .containsExactlyInAnyOrder(201, 409);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void registerStoresDocumentNumberInUniquenessCollectionWithDriverId() throws Exception {
+        String documentNumber = uniqueDocument();
+        String driverId = MAPPER.readTree(register(documentNumber).getBody()).get("id").asText();
+
+        var reservation = firestore.collection("document_numbers").document(documentNumber).get().get();
+
+        assertThat(reservation.exists()).isTrue();
+        assertThat(reservation.getString("driver_id")).isEqualTo(driverId);
+    }
+
+    @Test
+    void duplicateRegisterLeavesOnlyTheFirstDriverWithThatDocument() throws Exception {
+        String documentNumber = uniqueDocument();
+        String firstId = MAPPER.readTree(register(documentNumber).getBody()).get("id").asText();
+
+        ResponseEntity<String> duplicate = register(documentNumber);
+
+        assertThat(duplicate.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        var drivers = firestore.collection("drivers")
+                .whereEqualTo("document_number", documentNumber).get().get().getDocuments();
+        assertThat(drivers).hasSize(1);
+        assertThat(drivers.get(0).getId()).isEqualTo(firstId);
     }
 
     private ResponseEntity<String> register(String documentNumber) {
