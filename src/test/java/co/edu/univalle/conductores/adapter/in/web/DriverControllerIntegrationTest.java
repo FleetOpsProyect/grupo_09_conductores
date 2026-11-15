@@ -431,6 +431,26 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listPageBeyondLastPageReturns200WithEmptyContentAndRealTotal() throws Exception {
+        seedDriver(false, true);
+        seedDriver(false, true);
+        long total = totalOf("status=MEDICAL_HOLD_INCIDENT&size=2");
+        int beyondLastPage = (int) (total / 2) + 1;
+
+        ResponseEntity<String> response = client().get()
+                .uri("?status=MEDICAL_HOLD_INCIDENT&size=2&page=" + beyondLastPage)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("content").isArray()).isTrue();
+        assertThat(body.get("content")).isEmpty();
+        assertThat(body.get("page").asInt()).isEqualTo(beyondLastPage);
+        assertThat(body.get("total").asLong()).isEqualTo(total);
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
