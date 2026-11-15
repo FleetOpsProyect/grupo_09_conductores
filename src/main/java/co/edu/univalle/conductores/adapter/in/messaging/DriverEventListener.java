@@ -6,7 +6,9 @@ import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DlqSenderPort;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import io.awspring.cloud.sqs.annotation.SqsListener;
+import io.awspring.cloud.sqs.listener.SqsHeaders;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,12 +20,21 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Consumidor SQS que escucha eventos de fleetops_driver_queue.
+ *
+ * <p>Valida el sobre estándar {@code {event_id, event_type, occurred_at, source, correlation_id, data}}
+ * y {@code data.driver_id}. Un mensaje inválido o con tipo desconocido va a la DLQ sin reintentos, con
+ * log ERROR. Si falla la persistencia, la excepción se relanza para que SQS reintente; al tercer intento
+ * la redrive policy lo mueve a la DLQ.
  */
 @Component
 @ConditionalOnProperty(name = "app.messaging.consumer-enabled", havingValue = "true", matchIfMissing = true)
 public class DriverEventListener {
 
+    /** Igual al maxReceiveCount de la redrive policy de fleetops_driver_queue. */
+    static final int MAX_RECEIVES = 3;
+
     private static final Logger log = LoggerFactory.getLogger(DriverEventListener.class);
+    private static final String UNKNOWN = "unknown";
 
     private final ProcessDriverEvent processDriverEvent;
     private final ConsumerMetricsPort consumerMetrics;
@@ -53,108 +64,114 @@ public class DriverEventListener {
      * Escucha mensajes de la cola de eventos de conductores.
      *
      * @param payload      cuerpo del mensaje
-     * @param receiveCount número aproximado de recepciones para detectar
-     *                     max_retries
+     * @param receiveCount número aproximado de recepciones que informa SQS, para detectar max_retries
      */
     @SqsListener("${app.messaging.driver-queue:fleetops_driver_queue}")
     public void onMessage(
             String payload,
-            @Header(name = "ApproximateReceiveCount", required = false) String receiveCount) {
-        String eventType = "unknown";
+            @Header(name = SqsHeaders.MessageSystemAttributes.SQS_APPROXIMATE_RECEIVE_COUNT, required = false)
+            String receiveCount) {
+        String eventType = UNKNOWN;
+        String eventId = UNKNOWN;
 
         try {
-            JsonNode root = parseJson(payload);
-            if (root.has("Type") && "Notification".equals(root.get("Type").asString()) && root.has("Message")) {
-                root = parseJson(root.get("Message").asString());
-            }
+            JsonNode root = unwrapSnsNotification(parseJson(payload));
+            eventType = textOrUnknown(root, "event_type");
+            eventId = textOrUnknown(root, "event_id");
 
-            eventType = extractText(root, "event_type", "eventType");
-            UUID eventId = extractUuid(root, "event_id", "eventId");
-            JsonNode dataNode = root.get("data");
-            UUID driverId = dataNode != null ? extractUuid(dataNode, "driver_id", "driverId") : null;
-
-            if (eventId == null || driverId == null || eventType == null || "unknown".equals(eventType)) {
-                handleInvalidMessage(payload, eventType, "Faltan campos obligatorios en el evento");
-                return;
-            }
-
-            OffsetDateTime occurredAt = extractOccurredAt(root);
-            UUID correlationId = extractUuid(root, "correlation_id", "correlationId");
-
-            Command command = new Command(eventId, eventType, driverId, occurredAt, correlationId);
-            processDriverEvent.process(command);
+            processDriverEvent.process(toCommand(root));
 
         } catch (DriverNotFoundException ex) {
-            log.warn("Conductor no encontrado para el evento {}: {}", eventType, ex.getMessage());
+            log.warn("Conductor no encontrado para el evento {} ({}): {}", eventId, eventType, ex.getMessage());
             consumerMetrics.recordDlq(eventType, "driver_not_found");
             dlqSender.sendToDlq(payload, eventType, "driver_not_found");
 
         } catch (IllegalArgumentException ex) {
-            handleInvalidMessage(payload, eventType, ex.getMessage());
+            log.error("Mensaje inválido enviado a la DLQ: event_id={}, event_type={}, motivo={}",
+                    eventId, eventType, ex.getMessage());
+            consumerMetrics.recordDlq(eventType, "invalid_message");
+            dlqSender.sendToDlq(payload, eventType, "invalid_message");
 
-        } catch (Exception ex) {
-            if (isMaxRetries(receiveCount)) {
-                log.error("Evento {} alcanzó el máximo de reintentos: {}", eventType, ex.getMessage());
+        } catch (RuntimeException ex) {
+            if (isLastAttempt(receiveCount)) {
+                log.error("Evento {} ({}) alcanzó el máximo de {} intentos y pasará a la DLQ: {}",
+                        eventId, eventType, MAX_RECEIVES, ex.getMessage());
                 consumerMetrics.recordDlq(eventType, "max_retries");
             }
             throw ex;
         }
     }
 
+    private Command toCommand(JsonNode root) {
+        UUID eventId = requiredUuid(root, "event_id");
+        String eventType = requiredText(root, "event_type");
+        OffsetDateTime occurredAt = requiredDateTime(root, "occurred_at");
+        requiredText(root, "source");
+        UUID correlationId = requiredUuid(root, "correlation_id");
+        JsonNode data = root.get("data");
+        if (data == null || !data.isObject()) {
+            throw new IllegalArgumentException("Falta el campo obligatorio data");
+        }
+        UUID driverId = requiredUuid(data, "driver_id");
+        return new Command(eventId, eventType, driverId, occurredAt, correlationId);
+    }
+
     private JsonNode parseJson(String payload) {
         try {
             return jsonMapper.readTree(payload);
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new IllegalArgumentException("Mensaje con formato JSON inválido", ex);
         }
     }
 
-    private String extractText(JsonNode node, String snakeCase, String camelCase) {
-        if (node.has(snakeCase) && !node.get(snakeCase).isNull()) {
-            return node.get(snakeCase).asString();
+    private JsonNode unwrapSnsNotification(JsonNode root) {
+        if ("Notification".equals(textOrUnknown(root, "Type")) && root.has("Message")) {
+            return parseJson(root.get("Message").asString());
         }
-        if (node.has(camelCase) && !node.get(camelCase).isNull()) {
-            return node.get(camelCase).asString();
-        }
-        return "unknown";
+        return root;
     }
 
-    private UUID extractUuid(JsonNode node, String snakeCase, String camelCase) {
-        String text = extractText(node, snakeCase, camelCase);
-        if ("unknown".equals(text) || text.isBlank()) {
-            return null;
+    private static String textOrUnknown(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull() || !value.isString() || value.asString().isBlank()) {
+            return UNKNOWN;
         }
+        return value.asString().trim();
+    }
+
+    private static String requiredText(JsonNode node, String field) {
+        String text = textOrUnknown(node, field);
+        if (UNKNOWN.equals(text)) {
+            throw new IllegalArgumentException("Falta el campo obligatorio " + field);
+        }
+        return text;
+    }
+
+    private static UUID requiredUuid(JsonNode node, String field) {
+        String text = requiredText(node, field);
         try {
-            return UUID.fromString(text.trim());
+            return UUID.fromString(text);
         } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Identificador UUID inválido: " + text, ex);
+            throw new IllegalArgumentException("El campo " + field + " no es un UUID válido: " + text, ex);
         }
     }
 
-    private OffsetDateTime extractOccurredAt(JsonNode node) {
-        String text = extractText(node, "occurred_at", "occurredAt");
-        if (!"unknown".equals(text) && !text.isBlank()) {
-            try {
-                return OffsetDateTime.parse(text.trim());
-            } catch (Exception ex) {
-                log.debug("No se pudo parsear occurred_at: {}, usando hora actual", text);
-            }
+    private static OffsetDateTime requiredDateTime(JsonNode node, String field) {
+        String text = requiredText(node, field);
+        try {
+            return OffsetDateTime.parse(text);
+        } catch (DateTimeParseException ex) {
+            throw new IllegalArgumentException("El campo " + field + " no es una fecha ISO 8601 con offset: "
+                    + text, ex);
         }
-        return OffsetDateTime.now();
     }
 
-    private void handleInvalidMessage(String payload, String eventType, String reason) {
-        log.warn("Mensaje descartado hacia DLQ ({}): {}", reason, payload);
-        consumerMetrics.recordDlq(eventType, "invalid_message");
-        dlqSender.sendToDlq(payload, eventType, "invalid_message");
-    }
-
-    private boolean isMaxRetries(String receiveCount) {
+    private static boolean isLastAttempt(String receiveCount) {
         if (receiveCount == null) {
             return false;
         }
         try {
-            return Integer.parseInt(receiveCount) >= 3;
+            return Integer.parseInt(receiveCount.trim()) >= MAX_RECEIVES;
         } catch (NumberFormatException ex) {
             return false;
         }
