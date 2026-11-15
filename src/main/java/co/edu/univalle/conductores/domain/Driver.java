@@ -96,6 +96,36 @@ public class Driver {
     }
 
     /**
+     * Aplica el bloqueo por documentos vencidos.
+     *
+     * @param now momento en que se aplica el bloqueo
+     */
+    public void applyDocumentBlock(OffsetDateTime now) {
+        this.documentBlock = true;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Remueve el bloqueo por documentos vencidos cuando se renuevan.
+     *
+     * @param now momento en que se remueve el bloqueo
+     */
+    public void removeDocumentBlock(OffsetDateTime now) {
+        this.documentBlock = false;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Aplica el bloqueo médico por incidente grave reportado.
+     *
+     * @param now momento en que se aplica el bloqueo
+     */
+    public void applyMedicalBlock(OffsetDateTime now) {
+        this.medicalBlock = true;
+        this.updatedAt = now;
+    }
+
+    /**
      * Estado calculado con prioridad médico > documentos > activo.
      *
      * @return el estado actual del conductor

@@ -38,8 +38,9 @@ Compose las variables llegan al contenedor mediante `env_file`.
 | `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Prevista |
 | `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor (por ejemplo `-XX:MaxRAMPercentage=75.0`). | `-XX:MaxRAMPercentage=75.0` | Implementada |
 | `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | LocalStack local; ARN real en producción. | Implementada |
-| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | — | Prevista |
-| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | — | Prevista |
+| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | LocalStack local; URL real en producción. | Implementada |
+| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | LocalStack local; URL real en producción. | Implementada |
+| `FLEETOPS_CONSUMER_ENABLED` | Habilita o deshabilita el consumidor SQS de `fleetops_driver_queue`. Las pruebas lo apagan, salvo la de LocalStack. | `true` | Implementada |
 | `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | Implementada |
 | `OUTBOX_BATCH_SIZE` | Máximo de eventos pendientes por ciclo del publicador. | `50` | Implementada |
 | `OUTBOX_PUBLISHER_ENABLED` | Habilita o deshabilita el publicador periódico. | `true` | Implementada |
@@ -132,11 +133,46 @@ curl -X POST http://localhost:8085/drivers \
 Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/info`, no
 `/actuator/*`.
 
-En `/metrics`, las métricas de publicación de eventos son:
+En `/metrics`, las métricas de eventos son:
 
+**Publicación (outbox):**
 - `fleetops_driver_events_published_total{event_type}`: eventos publicados y marcados `SENT`.
 - `fleetops_driver_event_publish_failures_total{event_type}`: intentos fallidos de publicación en SNS.
 - `fleetops_outbox_pending_events`: eventos que siguen pendientes en Firestore.
+
+**Consumo SQS (DEV_07-3):**
+- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed` o `duplicate`.
+- `drivers_events_dlq_total{event_type, reason}`: eventos enviados o derivados a la DLQ con `reason = invalid_message`, `driver_not_found` o `max_retries`.
+
+### Consumidor SQS (TEC_06)
+
+El consumidor escucha en la cola `fleetops_driver_queue` (conectada por suscripciones SNS a eventos
+de documentación e incidentes). Procesa:
+- `document_expired_event`: aplica bloqueo de documentos al conductor (`INACTIVE_EXPIRED_DOCUMENTS`).
+- `document_renewed_event`: retira el bloqueo de documentos (`ACTIVE`).
+- `severe_incident_reported_event`: aplica bloqueo médico (`MEDICAL_HOLD_INCIDENT`).
+
+Acepta el mensaje tal cual o envuelto en la notificación de SNS, y valida el sobre estándar:
+`event_id` y `correlation_id` (UUID), `event_type`, `source`, `occurred_at` (ISO 8601 con offset)
+y `data.driver_id` (UUID). Los campos adicionales se ignoran.
+
+| Caso | Qué hace | Log | Métrica |
+| :--- | :--- | :--- | :--- |
+| Evento válido | Cambia el estado del conductor y confirma el mensaje. | — | `drivers_events_consumed_total{result="processed"}` |
+| `event_id` ya procesado | Confirma el mensaje sin cambios. | — | `drivers_events_consumed_total{result="duplicate"}` |
+| JSON inválido, campo faltante o `event_type` desconocido | Lo envía a la DLQ sin reintentos, con los atributos `event_type` y `reason`. | ERROR con `event_id` y el motivo | `drivers_events_dlq_total{reason="invalid_message"}` |
+| Conductor inexistente | Lo envía a la DLQ sin reintentos. | WARN | `drivers_events_dlq_total{reason="driver_not_found"}` |
+| Firestore no responde | No confirma el mensaje; SQS lo reentrega y, al 3.er intento fallido, la redrive policy (`maxReceiveCount = 3`) lo mueve a la DLQ. | ERROR en el 3.er intento | `drivers_events_dlq_total{reason="max_retries"}` |
+
+El número de intento sale del atributo `ApproximateReceiveCount` de SQS, que Spring Cloud AWS expone
+como la cabecera `Sqs_Msa_ApproximateReceiveCount`.
+
+**Idempotencia:** el cambio del conductor y el documento `processed_events/{event_id}` se guardan en
+una sola transacción de Firestore. Si el `event_id` ya existe, la transacción no escribe nada, así que
+dos entregas del mismo evento no pueden cambiar el conductor dos veces.
+
+`DriverEventListenerLocalStackIntegrationTest` prueba los 4 casos contra LocalStack y el emulador de
+Firestore.
 
 ## Firestore
 
@@ -146,6 +182,20 @@ En `/metrics`, las métricas de publicación de eventos son:
 - `created_at` ascendente.
 
 Este índice cubre el listado con filtro por estado y orden por fecha de creación.
+
+### Retención de `processed_events` (TTL)
+
+Cada documento de `processed_events` guarda `event_id`, `event_type`, `driver_id`, `processed_at` y
+`expire_at = processed_at + 30 días`. Una política TTL de Firestore sobre `expire_at` borra cada
+documento cuando vence; 30 días cubre de sobra las reentregas de SQS.
+
+La política TTL no se versiona en `firestore.indexes.json`. Se crea una vez por proyecto:
+
+- Consola: Firestore → **TTL** → **Create policy** → colección `processed_events`, campo `expire_at`.
+- CLI: `gcloud firestore fields ttls update expire_at --collection-group=processed_events --enable-ttl`
+
+Firestore borra los documentos vencidos normalmente dentro de las 24 horas siguientes a `expire_at`.
+El emulador no aplica TTL.
 
 El emulador no exige este índice, pero Firestore real sí. Despliégalo con
 `firebase deploy --only firestore:indexes`; de lo contrario, el listado filtrado por `status`

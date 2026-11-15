@@ -3,7 +3,9 @@ package co.edu.univalle.conductores.adapter.out.firestore;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
+import co.edu.univalle.conductores.application.port.out.ProcessedEventRepositoryPort;
 import co.edu.univalle.conductores.domain.Driver;
+import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
@@ -20,6 +22,7 @@ import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +34,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -41,7 +45,7 @@ import tools.jackson.databind.json.JsonMapper;
  * {@link IllegalStateException}. No SDK exception type leaves this class. This class does not log: the
  * web layer logs the failure once.
  */
-public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositoryPort {
+public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositoryPort, ProcessedEventRepositoryPort {
 
     private static final String DOCUMENT_NUMBERS = "document_numbers";
     private static final Set<StatusCode.Code> TRANSIENT_CODES = EnumSet.of(
@@ -62,7 +66,7 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
      *
      * @param firestore Firestore client
      * @param timeout maximum time a request waits for Firestore
-        * @param jsonMapper mapper configured by Spring
+     * @param jsonMapper mapper configured by Spring
      */
     public FirestoreDriverAdapter(Firestore firestore, Duration timeout, JsonMapper jsonMapper) {
         this.firestore = firestore;
@@ -153,6 +157,36 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
                 OutboxEventDocument.ATTEMPTS, FieldValue.increment(1)));
     }
 
+    /**
+     * Applies a consumed event once. The processed_events check, the driver change and the
+     * processed_events record run in one transaction, so two deliveries of the same event cannot both
+     * change the driver.
+     */
+    @Override
+    public boolean applyOnce(
+            UUID eventId, String eventType, UUID driverId, Instant processedAt, Consumer<Driver> change) {
+        DocumentReference processedRef = firestore.collection(ProcessedEventDocument.COLLECTION)
+                .document(eventId.toString());
+        DocumentReference driverRef = drivers().document(driverId.toString());
+
+        return await(firestore.runTransaction(transaction -> {
+            if (transaction.get(processedRef).get().exists()) {
+                return false;
+            }
+            DocumentSnapshot driverSnapshot = transaction.get(driverRef).get();
+            if (!driverSnapshot.exists()) {
+                throw new DriverNotFoundException(driverId);
+            }
+
+            Driver driver = DriverDocument.toDomain(driverSnapshot.getData());
+            change.accept(driver);
+
+            transaction.set(driverRef, DriverDocument.fromDomain(driver));
+            transaction.set(processedRef, ProcessedEventDocument.of(eventId, eventType, driverId, processedAt));
+            return true;
+        }));
+    }
+
     @Override
     public void save(Driver driver) {
         await(drivers().document(driver.getId().toString()).set(DriverDocument.fromDomain(driver)));
@@ -233,6 +267,9 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
     private static RuntimeException translate(Throwable failure) {
         if (failure instanceof DuplicateDocumentException duplicate) {
             return duplicate;
+        }
+        if (failure instanceof DriverNotFoundException notFound) {
+            return notFound;
         }
         ApiException api = findApiException(failure);
         if (api != null && TRANSIENT_CODES.contains(api.getStatusCode().getCode())) {
