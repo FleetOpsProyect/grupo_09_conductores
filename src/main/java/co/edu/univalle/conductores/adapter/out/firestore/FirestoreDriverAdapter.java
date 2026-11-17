@@ -17,6 +17,7 @@ import com.google.cloud.firestore.AggregateQuerySnapshot;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
+import com.google.cloud.firestore.FieldPath;
 import com.google.cloud.firestore.FieldValue;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
@@ -206,7 +207,8 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
      */
     @Override
     public PageResult<Driver> findAll(DriverStatus status, int page, int size) {
-        Query query = drivers().orderBy("created_at");
+        Query query = drivers().orderBy("created_at")
+                .orderBy(FieldPath.documentId(), Query.Direction.ASCENDING);
         if (status != null) {
             query = query.whereEqualTo("status", status.name());
         }

@@ -28,6 +28,7 @@ import com.google.cloud.firestore.AggregateQuerySnapshot;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
+import com.google.cloud.firestore.FieldPath;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
@@ -300,6 +301,7 @@ class FirestoreDriverAdapterTest {
             case FIND_ALL -> {
                 when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
                 when(drivers.orderBy("created_at")).thenReturn(query);
+                when(query.orderBy(any(FieldPath.class), any(Query.Direction.class))).thenReturn(query);
                 when(query.count()).thenReturn(countQuery);
                 when(countQuery.get()).thenReturn((ApiFuture) future);
                 stubPageQuery();

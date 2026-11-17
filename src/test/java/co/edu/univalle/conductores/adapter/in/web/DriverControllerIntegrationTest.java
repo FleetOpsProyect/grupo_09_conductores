@@ -1,19 +1,34 @@
 package co.edu.univalle.conductores.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import co.edu.univalle.conductores.BaseIntegrationTest;
+import co.edu.univalle.conductores.application.port.out.DriverRepository;
+import co.edu.univalle.conductores.domain.Driver;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
+import java.time.ZoneOffset;
+import java.net.InetSocketAddress;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.web.client.RestClient;
 
 class DriverControllerIntegrationTest extends BaseIntegrationTest {
@@ -22,6 +37,9 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
     @LocalServerPort
     private int port;
+
+    @MockitoSpyBean
+    private DriverRepository driverRepository;
 
     @Test
     void registerReturns201WithSnakeCaseFields() throws Exception {
@@ -192,6 +210,84 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void getExistingDriverReturnsRequiredFields() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("id").asText()).isEqualTo(id);
+        assertThat(body.get("full_name").asText()).isNotBlank();
+        assertThat(body.get("document_number").asText()).isNotBlank();
+        assertThat(body.get("email").asText()).isNotBlank();
+        assertThat(body.has("phone")).isTrue();
+        assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void getDriverInactiveForExpiredDocumentsReturns200() throws Exception {
+        UUID id = seedDriver(true, false);
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("status").asText())
+                .isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+    }
+
+    @Test
+    void getDriverWithMedicalHoldReturns200() throws Exception {
+        UUID id = seedDriver(false, true);
+
+        ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("status").asText())
+                .isEqualTo("MEDICAL_HOLD_INCIDENT");
+    }
+
+    @Test
+    void getDriverReturnsSameResponseWithOrWithoutAuthorizationHeader() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> withoutToken = client().get().uri("/{id}", id)
+                .retrieve().toEntity(String.class);
+
+        ResponseEntity<String> withToken = client().get().uri("/{id}", id)
+                .header("Authorization", "Bearer token-de-prueba")
+                .retrieve().toEntity(String.class);
+
+        assertThat(withToken.getStatusCode()).isEqualTo(withoutToken.getStatusCode());
+        assertThat(withToken.getBody()).isEqualTo(withoutToken.getBody());
+    }
+
+    @Test
+    void getUnknownDriverReturnsSameResponseWithOrWithoutAuthorizationHeader() throws Exception {
+        UUID id = UUID.randomUUID();
+
+        ResponseEntity<String> withoutToken = client().get().uri("/{id}", id)
+                .retrieve().toEntity(String.class);
+
+        ResponseEntity<String> withToken = client().get().uri("/{id}", id)
+                .header("Authorization", "Bearer token-de-prueba")
+                .retrieve().toEntity(String.class);
+
+        assertThat(withoutToken.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(withToken.getStatusCode()).isEqualTo(withoutToken.getStatusCode());
+        assertDriverNotFound(withoutToken, id.toString());
+        assertDriverNotFound(withToken, id.toString());
+    }
+
+    private UUID seedDriver(boolean documentBlock, boolean medicalBlock) {
+        UUID id = UUID.randomUUID();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.ofHours(-5));
+        driverRepository.save(Driver.restore(id, uniqueDocument(), "Carlos Pérez", "carlos@correo.com",
+                "3001234567", documentBlock, medicalBlock, now, now));
+        return id;
+    }
+
+    @Test
     void getUnknownDriverReturns404() throws Exception {
         UUID id = UUID.randomUUID();
 
@@ -272,6 +368,178 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void listWithSeveralInvalidParametersReturnsOneErrorPerParameter() throws Exception {
+        ResponseEntity<String> response = client().get().uri("?size=500&page=-1").retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(body.get("errors")).hasSize(2);
+        assertThat(fieldCodes(body))
+                .isEqualTo(Map.of("size", "VALUE_NOT_ALLOWED", "page", "VALUE_NOT_ALLOWED"));
+    }
+
+    @Test
+    void listTotalCountsAllMatchingDriversNotOnlyCurrentPage() throws Exception {
+        long before = totalOf("status=MEDICAL_HOLD_INCIDENT");
+        seedDriver(false, true);
+        seedDriver(false, true);
+        seedDriver(false, true);
+
+        ResponseEntity<String> response = client().get()
+                .uri("?status=MEDICAL_HOLD_INCIDENT&size=2")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("content")).hasSize(2);
+        assertThat(body.get("page").asInt()).isZero();
+        assertThat(body.get("size").asInt()).isEqualTo(2);
+        assertThat(body.get("total").asLong()).isEqualTo(before + 3);
+    }
+
+    private long totalOf(String query) throws Exception {
+        ResponseEntity<String> response = client().get().uri("?" + query).retrieve().toEntity(String.class);
+        return MAPPER.readTree(response.getBody()).get("total").asLong();
+    }
+
+    @Test
+    void listReturnsSameOrderOnTwoCallsWhenCreatedAtIsEqual() throws Exception {
+        OffsetDateTime sameInstant = OffsetDateTime.now(ZoneOffset.ofHours(-5)).truncatedTo(ChronoUnit.MILLIS);
+        List<String> seededIds = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            UUID id = UUID.randomUUID();
+            seededIds.add(id.toString());
+            driverRepository.save(Driver.restore(id, uniqueDocument(), "Carlos Pérez", "carlos@correo.com",
+                    "3001234567", true, false, sameInstant, sameInstant));
+        }
+
+        String first = client().get().uri("?status=INACTIVE_EXPIRED_DOCUMENTS&size=100")
+                .retrieve().toEntity(String.class).getBody();
+        String second = client().get().uri("?status=INACTIVE_EXPIRED_DOCUMENTS&size=100")
+                .retrieve().toEntity(String.class).getBody();
+
+        assertThat(second).isEqualTo(first);
+        assertThat(idsIn(first)).containsAll(seededIds);
+    }
+
+    private List<String> idsIn(String listBody) throws Exception {
+        List<String> ids = new ArrayList<>();
+        MAPPER.readTree(listBody).get("content").forEach(driver -> ids.add(driver.get("id").asText()));
+        return ids;
+    }
+
+    @Test
+    void listPageBeyondLastPageReturns200WithEmptyContentAndRealTotal() throws Exception {
+        seedDriver(false, true);
+        seedDriver(false, true);
+        long total = totalOf("status=MEDICAL_HOLD_INCIDENT&size=2");
+        int beyondLastPage = (int) (total / 2) + 1;
+
+        ResponseEntity<String> response = client().get()
+                .uri("?status=MEDICAL_HOLD_INCIDENT&size=2&page=" + beyondLastPage)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("content").isArray()).isTrue();
+        assertThat(body.get("content")).isEmpty();
+        assertThat(body.get("page").asInt()).isEqualTo(beyondLastPage);
+        assertThat(body.get("total").asLong()).isEqualTo(total);
+    }
+
+    @Test
+    void listIncludesActiveDriverWithoutLicenseData() throws Exception {
+        UUID id = seedDriver(false, false);
+        long total = totalOf("status=ACTIVE&size=100");
+        int lastPage = (int) ((total - 1) / 100);
+
+        ResponseEntity<String> response = client().get()
+                .uri("?status=ACTIVE&size=100&page=" + lastPage)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(idsIn(response.getBody())).contains(id.toString());
+    }
+
+    @Test
+    void listWithoutValidUntilMakesNoOutboundCalls() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            ResponseEntity<String> response = client().get().uri("?status=ACTIVE&size=20")
+                    .retrieve().toEntity(String.class);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(outboundCalls.get()).isZero();
+        } finally {
+            simulatedExternalService.stop(0);
+        }
+    }
+
+    @Test
+    void listWithoutParametersUsesDefaultPageAndSize() throws Exception {
+        ResponseEntity<String> response = client().get().uri("").retrieve().toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("page").asInt()).isZero();
+        assertThat(body.get("size").asInt()).isEqualTo(20);
+        assertThat(body.get("content").size()).isLessThanOrEqualTo(20);
+    }
+
+    @Test
+    void listOrdersByCreatedAtAscendingRegardlessOfInsertionOrder() throws Exception {
+        OffsetDateTime first = OffsetDateTime.of(2026, 1, 1, 10, 0, 0, 0, ZoneOffset.ofHours(-5));
+        OffsetDateTime second = first.plusDays(1);
+        OffsetDateTime third = first.plusDays(2);
+        UUID idThird = saveInactiveDriverCreatedAt(third);
+        UUID idFirst = saveInactiveDriverCreatedAt(first);
+        UUID idSecond = saveInactiveDriverCreatedAt(second);
+
+        String body = client().get().uri("?status=INACTIVE_EXPIRED_DOCUMENTS&size=100")
+                .retrieve().toEntity(String.class).getBody();
+
+        assertThat(idsIn(body)).containsSubsequence(idFirst.toString(), idSecond.toString(), idThird.toString());
+    }
+
+    @Test
+    void listElementsHaveTheSameFieldsAsGetById() throws Exception {
+        UUID id = seedDriver(false, true);
+
+        String body = client().get().uri("?status=MEDICAL_HOLD_INCIDENT&size=100")
+                .retrieve().toEntity(String.class).getBody();
+        JsonNode element = null;
+        for (JsonNode driver : MAPPER.readTree(body).get("content")) {
+            if (driver.get("id").asText().equals(id.toString())) {
+                element = driver;
+            }
+        }
+
+        assertThat(element).isNotNull();
+        List<String> fields = new ArrayList<>();
+        element.fieldNames().forEachRemaining(fields::add);
+        assertThat(fields).containsExactlyInAnyOrder(
+                "id", "full_name", "document_number", "email", "phone", "status", "created_at", "updated_at");
+    }
+
+    private UUID saveInactiveDriverCreatedAt(OffsetDateTime createdAt) {
+        UUID id = UUID.randomUUID();
+        driverRepository.save(Driver.restore(id, uniqueDocument(), "Carlos Pérez", "carlos@correo.com",
+                "3001234567", true, false, createdAt, createdAt));
+        return id;
+    }
+
+    @Test
     void updateChangesEditableFieldsAndReturns200() throws Exception {
         String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
         String body = """
@@ -286,6 +554,48 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(MAPPER.readTree(response.getBody()).get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+    
+    @Test
+    void getDriverMakesNoOutboundCallsAndReturnsNoLicenseData() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+            ResponseEntity<String> response = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(outboundCalls.get()).isZero();
+
+            JsonNode body = MAPPER.readTree(response.getBody());
+            List<String> fields = new ArrayList<>();
+            body.fieldNames().forEachRemaining(fields::add);
+            assertThat(fields).containsExactlyInAnyOrder(
+                    "id", "full_name", "document_number", "email", "phone", "status", "created_at", "updated_at");
+        } finally {
+            simulatedExternalService.stop(0);
+        }
+    }
+
+    @Test
+    void twoConsecutiveGetsReturnSameBodyAndDoNotSave() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+        clearInvocations(driverRepository);
+
+        ResponseEntity<String> first = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+        ResponseEntity<String> second = client().get().uri("/{id}", id).retrieve().toEntity(String.class);
+
+        assertThat(first.getBody()).isEqualTo(second.getBody());
+        assertThat(MAPPER.readTree(second.getBody()).get("updated_at").asText())
+                .isEqualTo(MAPPER.readTree(first.getBody()).get("updated_at").asText());
+        verify(driverRepository, never()).save(any());
     }
 
     private ResponseEntity<String> register(String documentNumber) {
