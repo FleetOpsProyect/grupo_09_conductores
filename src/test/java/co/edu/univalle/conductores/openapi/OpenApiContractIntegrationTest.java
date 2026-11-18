@@ -50,10 +50,33 @@ class OpenApiContractIntegrationTest extends BaseIntegrationTest {
 
     @Test
     void responseCodesMatchUserStories() {
-        assertThat(codes("/drivers", "post")).containsExactlyInAnyOrder("201", "400", "403", "409", "503");
-        assertThat(codes("/drivers", "get")).containsExactlyInAnyOrder("200", "400", "403", "503");
+        assertThat(codes("/drivers", "post")).containsExactlyInAnyOrder("201", "400", "401", "403", "409", "503");
+        assertThat(codes("/drivers", "get")).containsExactlyInAnyOrder("200", "400", "401", "403", "503");
         assertThat(codes("/drivers/{id}", "get")).containsExactlyInAnyOrder("200", "403", "404", "503");
-        assertThat(codes("/drivers/{id}", "put")).containsExactlyInAnyOrder("200", "400", "404", "503");
+        assertThat(codes("/drivers/{id}", "put")).containsExactlyInAnyOrder("200", "400", "401", "403", "404", "503");
+    }
+
+    @Test
+    void fleetAdminRoutesDocumentGatewayResponsesInsteadOfPhaseTwo() {
+        for (String operation : new String[] {"~1drivers/post", "~1drivers/get", "~1drivers~1{id}/put"}) {
+            String pointer = "/paths/" + operation;
+            assertThat(spec.at(pointer + "/description").asText())
+                    .as(operation)
+                    .contains("FLEET_ADMIN", "authorizer")
+                    .doesNotContain("Fase 2", "ROLE_NOT_AUTHORIZED");
+            assertThat(spec.at(pointer + "/responses/401/description").asText()).contains("API Gateway");
+            assertThat(spec.at(pointer + "/responses/403/description").asText())
+                    .contains("API Gateway", "FLEET_ADMIN");
+            assertThat(spec.at(pointer + "/responses/403/content").toString()).contains("GatewayErrorResponse");
+        }
+        assertThat(properties(spec.at("/components/schemas/GatewayErrorResponse"))).containsExactly("message");
+    }
+
+    @Test
+    void infoDescribesTheGatewayAuthorizer() {
+        assertThat(spec.at("/info/description").asText())
+                .contains("fleetops-authorizer", "FLEET_ADMIN", "DRIVER", "custom:driver_id")
+                .doesNotContain("Fase 2", "superusuario");
     }
 
     @Test

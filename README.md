@@ -107,15 +107,57 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 
 | Método | Ruta | Descripción |
 | :--- | :--- | :--- |
-| `POST` | `/drivers` | Registra un conductor. Responde `201`, `400`, `409` o `503`. |
+| `POST` | `/drivers` | Registra un conductor. Responde `201`, `400`, `409` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200`, `404` (también `404` si el id no es un UUID) o `503`. |
-| `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503`. |
-| `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503`. |
+| `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
+| `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
 | `GET` | `/metrics` | Métricas en formato Prometheus. |
 | `GET` | `/info` | Información del servicio. |
 | `GET` | `/v3/api-docs` | Especificación OpenAPI en JSON, con propiedades en snake_case. |
 | `GET` | `/swagger-ui.html` | Interfaz Swagger UI. |
+
+### Autenticación y roles
+
+El servicio no valida tokens ni roles. Lo hace el authorizer `fleetops-authorizer` (Lambda) del HTTP
+API `fleetops-api` en API Gateway, antes de que la petición llegue a la EC2:
+
+- Verifica el **ID token** de Cognito: firma RS256, emisor, audiencia (`APP_CLIENT_ID`), expiración y
+  `token_use = id`.
+- Busca la ruta en un catálogo de grupos de Cognito permitidos. Una ruta que no está en el catálogo se
+  rechaza.
+
+| Ruta | Grupos permitidos |
+| :--- | :--- |
+| `POST /drivers` | `FLEET_ADMIN` |
+| `GET /drivers` (con o sin `valid_until`) | `FLEET_ADMIN` |
+| `GET /drivers/{id}` | `FLEET_ADMIN`; `DRIVER` solo si su `custom:driver_id` es igual al `{id}` |
+| `PUT /drivers/{id}` | `FLEET_ADMIN` |
+| `POST /drivers/{id}/medical-release` | `FLEET_ADMIN` |
+
+Los grupos `EMPLOYEE`, `MAINTENANCE_TECHNICIAN` y `MANAGEMENT` no tienen acceso a estas rutas.
+
+Respuestas de API Gateway (no siguen el formato común de error; las genera el Gateway):
+
+| Caso | Respuesta |
+| :--- | :--- |
+| Sin encabezado `Authorization` | `401 {"message":"Unauthorized"}` |
+| Token inválido, alterado o expirado | `403 {"message":"Forbidden"}` |
+| Grupo no permitido, o `DRIVER` con un `{id}` que no es el suyo | `403 {"message":"Forbidden"}` |
+| La Lambda falla o supera su tiempo | `500` |
+
+Las llamadas internas de otros microservicios (Asignaciones, Telemetría) van directas a la EC2, sin JWT,
+y no pasan por el authorizer.
+
+Para verificar el catálogo después de cada despliegue, `scripts/verify-authorizer.sh` pide los tokens de
+los usuarios de prueba a Cognito, llama a todas las rutas por API Gateway y compara cada código con el
+esperado:
+
+```bash
+export API='<Invoke URL del stage>' CLIENT_ID='<app client id>' TEST_PASSWORD='<contraseña>'
+export EC2_URL='http://<elastic-ip>:8085'   # opcional: comprueba también una llamada interna
+./scripts/verify-authorizer.sh
+```
 
 Ejemplo de registro:
 
