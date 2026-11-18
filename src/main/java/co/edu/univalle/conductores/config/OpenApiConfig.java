@@ -29,14 +29,18 @@ public class OpenApiConfig {
                         .title("FleetOps - Microservicio de Conductores (G09)")
                         .version("1.0.0")
                         .description("""
-                                MVP: el API Gateway valida el JWT de Cognito y responde 401 si falta \
-                                o es inválido. Cualquier token válido actúa como superusuario; el \
-                                servicio no valida roles y no responde 403. Las llamadas internas \
-                                de otros microservicios llegan sin JWT, protegidas por security group.
+                                Seguridad: el authorizer fleetops-authorizer de API Gateway verifica el \
+                                ID token de Cognito (firma, emisor, audiencia y expiración) y aplica los \
+                                permisos por grupo de Cognito antes de que la petición llegue al \
+                                servicio. Sin encabezado Authorization responde 401; con un token \
+                                inválido o expirado, o con un grupo no permitido, responde 403. Esas \
+                                respuestas las genera el Gateway con el cuerpo {"message": ...} y no \
+                                siguen el formato común de error. El servicio no valida roles.
 
-                                Fase 2 (documentada, no implementada): validación de roles con \
-                                cognito:groups y regla "solo el propio" con custom:driver_id, \
-                                con respuesta 403."""))
+                                Permisos: FLEET_ADMIN puede usar todas las rutas de conductores; DRIVER \
+                                solo GET /drivers/{id} con su propio id (custom:driver_id); los demás \
+                                grupos no tienen acceso. Las llamadas internas de otros microservicios \
+                                llegan directas a la EC2, sin JWT, y no pasan por el authorizer."""))
                 .components(new Components().addSecuritySchemes(BEARER_AUTH,
                         new SecurityScheme()
                                 .type(SecurityScheme.Type.HTTP)

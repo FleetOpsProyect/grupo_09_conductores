@@ -3,6 +3,7 @@ package co.edu.univalle.conductores.adapter.in.web;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverPageResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
+import co.edu.univalle.conductores.adapter.in.web.dto.GatewayErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.RegisterDriverRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.UpdateDriverRequest;
 import co.edu.univalle.conductores.application.port.in.GetDriver;
@@ -49,6 +50,23 @@ public class DriverController {
     private static final Pattern UUID_PATTERN = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
+    /** Role rule of the routes that only FLEET_ADMIN can call through API Gateway. */
+    static final String FLEET_ADMIN_ONLY = """
+            **Roles:** por API Gateway solo el grupo FLEET_ADMIN (Administrador de Flota). Lo aplica \
+            el authorizer del Gateway; el servicio no valida roles. Las llamadas internas de otros \
+            microservicios llegan directas a la EC2, sin JWT, y no pasan por el authorizer.""";
+
+    /** 401 returned by API Gateway, not by the service. */
+    static final String GATEWAY_401 = """
+            Lo responde API Gateway, no el servicio: falta el encabezado Authorization. Cuerpo \
+            {"message": "Unauthorized"}, que no sigue el formato común de error.""";
+
+    /** 403 returned by API Gateway for routes that only FLEET_ADMIN can call. */
+    static final String GATEWAY_403_FLEET_ADMIN = """
+            Lo responde API Gateway, no el servicio: el token es inválido o expiró, o cognito:groups \
+            no incluye FLEET_ADMIN. Cuerpo {"message": "Forbidden"}, que no sigue el formato común de \
+            error.""";
+
     private final RegisterDriver registerDriver;
     private final GetDriver getDriver;
     private final ListDriver listDriver;
@@ -81,8 +99,7 @@ public class DriverController {
             Crea un conductor con status ACTIVE. El campo status del cuerpo, si llega, se ignora.
             El document_number debe ser único.
 
-            **Fase 2, no implementado:** solo el grupo Administrador de Flota podrá registrar \
-            conductores (403 ROLE_NOT_AUTHORIZED). En el MVP cualquier token válido puede hacerlo.""")
+            """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
         @ApiResponse(responseCode = "201", description = "Conductor creado con status ACTIVE"),
         @ApiResponse(responseCode = "400",
@@ -90,9 +107,10 @@ public class DriverController {
                 INVALID_DATA: uno o más campos no cumplen su regla; errors trae un elemento por \
                 cada campo inválido. INVALID_JSON: el cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403",
-            description = "ROLE_NOT_AUTHORIZED: fase 2, no implementado en el MVP",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "401", description = GATEWAY_401,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "409",
             description = "DUPLICATE_DRIVER: ya existe un conductor con ese document_number",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
@@ -119,23 +137,27 @@ public class DriverController {
      * @param id driver id as received in the path
      * @return driver found
      */
-    @Operation(summary = "Consultar un conductor por id (HU-02)",
+    @Operation(summary = "Consultar un conductor por id (HU-02, HU-03)",
         description = """
             Devuelve el conductor con su status actual. Un conductor inactivo \
             (INACTIVE_EXPIRED_DOCUMENTS o MEDICAL_HOLD_INCIDENT) se devuelve con 200, no con 404. \
             Las llamadas internas de otros microservicios, sin JWT, reciben la misma respuesta.
 
-            **Fase 2, no implementado (HU-03, regla "solo el propio"):** si cognito:groups incluye \
-            Conductor, el claim custom:driver_id debe ser igual al {id} de la ruta; si es distinto \
-            o no viene en el token, se responde 403 ACCESS_DENIED sin consultar la base de datos. \
-            En el MVP cualquier token válido consulta cualquier id.""")
+            **Roles (HU-03, regla "solo el propio"):** por API Gateway, FLEET_ADMIN consulta \
+            cualquier id; DRIVER solo el suyo, es decir, cuando el claim custom:driver_id de su ID \
+            token es igual al {id} de la ruta. Lo aplica el authorizer del Gateway: si el id no es el \
+            suyo o el token no trae custom:driver_id, responde 403 sin que la petición llegue al \
+            servicio, así que la respuesta no revela si ese id existe. El servicio no valida roles.""")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Conductor encontrado"),
+        @ApiResponse(responseCode = "401", description = GATEWAY_401,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "403",
             description = """
-                ACCESS_DENIED: fase 2, no implementado en el MVP. Un conductor intenta consultar \
-                un registro que no es el suyo, o su token no trae custom:driver_id.""",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+                Lo responde API Gateway, no el servicio: el token es inválido o expiró; el grupo no \
+                es FLEET_ADMIN ni DRIVER; o es DRIVER y custom:driver_id falta o no es igual al {id}. \
+                Cuerpo {"message": "Forbidden"}, que no sigue el formato común de error.""",
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "404",
             description = """
                 DRIVER_NOT_FOUND: no existe un conductor con ese id, o el id no es un UUID \
@@ -165,8 +187,7 @@ public class DriverController {
             todas las páginas. Si ninguno lo cumple, o page supera la última página, responde \
             200 con content vacío, nunca 404.
 
-            **Fase 2, no implementado:** un token del grupo Conductor recibirá \
-            403 ROLE_NOT_AUTHORIZED.""")
+            """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Página de conductores"),
         @ApiResponse(responseCode = "400",
@@ -174,9 +195,10 @@ public class DriverController {
                 INVALID_DATA: status, page o size no cumplen su regla; errors trae un elemento \
                 por cada parámetro inválido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403",
-            description = "ROLE_NOT_AUTHORIZED: fase 2, no implementado en el MVP",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "401", description = GATEWAY_401,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "503",
             description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
@@ -203,7 +225,9 @@ public class DriverController {
         description = """
             Reemplaza los campos editables (full_name, email y phone) con las mismas reglas del \
             registro. El cuerpo debe traer todos los campos obligatorios. El status del conductor \
-            no cambia.""")
+            no cambia.
+
+            """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Conductor actualizado"),
         @ApiResponse(responseCode = "400",
@@ -212,6 +236,10 @@ public class DriverController {
                 obligatorio); errors trae un elemento por cada campo inválido. INVALID_JSON: el \
                 cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "401", description = GATEWAY_401,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "404",
             description = """
                 DRIVER_NOT_FOUND: no existe un conductor con ese id, o el id no es un UUID \
