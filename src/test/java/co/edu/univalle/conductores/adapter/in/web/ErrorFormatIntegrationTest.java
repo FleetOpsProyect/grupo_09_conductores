@@ -101,7 +101,7 @@ class ErrorFormatIntegrationTest extends BaseIntegrationTest {
                 .toEntity(String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        JsonNode body = assertErrorFormat(response, "INVALID_DATA", "Hay datos inválidos en la solicitud",
+        JsonNode body = assertErrorFormat(response, "INVALID_DATA", "Los datos del conductor no son válidos",
                 "/drivers", true);
         assertThat(body.get("errors").isArray()).isTrue();
         assertThat(body.get("errors")).isNotEmpty();
@@ -175,6 +175,19 @@ class ErrorFormatIntegrationTest extends BaseIntegrationTest {
 
         assertThat(listResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertErrorFormat(listResponse, "SERVICE_UNAVAILABLE",
+                "Servicio temporalmente no disponible, intente nuevamente", "/drivers", false);
+
+        ResponseEntity<String> createResponse = client().post().uri("/drivers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("""
+                        {"full_name":"Carlos Pérez","document_number":"1234567890",
+                         "email":"carlos@correo.com","phone":"3001234567"}
+                        """)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(createResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertErrorFormat(createResponse, "SERVICE_UNAVAILABLE",
                 "Servicio temporalmente no disponible, intente nuevamente", "/drivers", false);
     }
 

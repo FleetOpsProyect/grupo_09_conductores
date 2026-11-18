@@ -19,9 +19,10 @@ public record RegisterDriverRequest(
         @Pattern(regexp = "^3[0-9]{9}$") String phone) {
 
     /**
-     * Trims full_name so its length rule is checked without leading and trailing spaces.
+     * Trims full_name and document_number so their rules are checked without leading and trailing spaces.
      */
     public RegisterDriverRequest {
         fullName = fullName == null ? null : fullName.trim();
+        documentNumber = documentNumber == null ? null : documentNumber.trim();
     }
 }
