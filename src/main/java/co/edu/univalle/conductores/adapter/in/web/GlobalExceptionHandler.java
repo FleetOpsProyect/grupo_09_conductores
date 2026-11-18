@@ -14,8 +14,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -165,7 +168,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ErrorResponse> handleRouteNotFound(NoResourceFoundException ex,
             HttpServletRequest request) {
-        return build(HttpStatus.NOT_FOUND, "ROUTE_NOT_FOUND", "Ruta no encontrada", request, List.of());
+        return build(HttpStatus.NOT_FOUND, "ROUTE_NOT_FOUND", "La ruta solicitada no existe", request, List.of());
     }
 
     /**
@@ -186,6 +189,36 @@ public class GlobalExceptionHandler {
             headers.setAllow(ex.getSupportedHttpMethods());
         }
         return ResponseEntity.status(response.getStatusCode()).headers(headers).body(response.getBody());
+    }
+
+    /**
+     * Request body with a Content-Type the route does not accept: 415 UNSUPPORTED_MEDIA_TYPE.
+     * The Accept header lists the supported media types.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the Accept header
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex,
+            HttpServletRequest request) {
+        return fromSpring(ex, "UNSUPPORTED_MEDIA_TYPE",
+                "Tipo de contenido no soportado; use application/json", request);
+    }
+
+    /**
+     * Accept header the route cannot satisfy: 406 NOT_ACCEPTABLE. The body is always JSON, even though
+     * the client did not ask for it, so it still follows the common format.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error in JSON
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleNotAcceptable(HttpMediaTypeNotAcceptableException ex,
+            HttpServletRequest request) {
+        return fromSpring(ex, "NOT_ACCEPTABLE",
+                "Formato de respuesta no disponible; use application/json", request);
     }
 
     /**
@@ -210,23 +243,36 @@ public class GlobalExceptionHandler {
      * Any unexpected exception: 500 INTERNAL_ERROR. The stack trace is logged at ERROR and never
      * returned to the client.
      *
-     * <p>Spring MVC exceptions (they implement {@link org.springframework.web.ErrorResponse}) are
-     * rethrown so Spring resolves them with their own status, for example 415 or 406, instead of 500.
+     * <p>Any other Spring MVC exception (it implements {@link org.springframework.web.ErrorResponse},
+     * for example a missing request header) keeps its own status and headers, with code
+     * REQUEST_NOT_PROCESSABLE, so no error leaves the service in Spring's default format.
      *
      * @param ex thrown exception
      * @param request current request
      * @return common error without exception details
-     * @throws Exception the same exception when it is a Spring MVC exception
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex, HttpServletRequest request)
-            throws Exception {
-        if (ex instanceof org.springframework.web.ErrorResponse) {
-            throw ex;
+    public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex, HttpServletRequest request) {
+        if (ex instanceof org.springframework.web.ErrorResponse springError) {
+            return fromSpring(springError, "REQUEST_NOT_PROCESSABLE", "La solicitud no se pudo procesar", request);
         }
         log.error("Unexpected error on {} {}", request.getMethod(), request.getRequestURI(), ex);
-        return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Error interno del servidor",
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Error interno del servicio",
                 request, List.of());
+    }
+
+    /**
+     * Builds the common error for a Spring MVC exception, keeping its status and headers (Allow, Accept)
+     * and forcing a JSON body so content negotiation cannot drop it.
+     */
+    private ResponseEntity<ErrorResponse> fromSpring(org.springframework.web.ErrorResponse ex, String code,
+            String message, HttpServletRequest request) {
+        ErrorResponse body = new ErrorResponse(code, message,
+                OffsetDateTime.now(ZoneId.of("America/Bogota")), request.getRequestURI(), List.of());
+        return ResponseEntity.status(ex.getStatusCode())
+                .headers(ex.getHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
     }
 
     private ResponseEntity<ErrorResponse> build(HttpStatus status, String code, String message,

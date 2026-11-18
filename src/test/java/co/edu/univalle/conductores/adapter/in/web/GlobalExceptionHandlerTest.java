@@ -1,7 +1,6 @@
 package co.edu.univalle.conductores.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
@@ -29,9 +28,11 @@ import org.springframework.mock.http.MockHttpInputMessage;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.validation.DirectFieldBindingResult;
 import org.springframework.validation.beanvalidation.SpringValidatorAdapter;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.PropertyNamingStrategies;
@@ -164,21 +165,48 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void springMvcExceptionIsRethrownByGenericHandler() {
-        HttpMediaTypeNotSupportedException ex = new HttpMediaTypeNotSupportedException(
-                MediaType.TEXT_PLAIN, List.of(MediaType.APPLICATION_JSON));
+    void unsupportedMediaTypeIs415WithAcceptHeader() {
+        ResponseEntity<ErrorResponse> response = handler.handleUnsupportedMediaType(
+                new HttpMediaTypeNotSupportedException(MediaType.TEXT_PLAIN, List.of(MediaType.APPLICATION_JSON)),
+                request);
 
-        assertThat(catchThrowable(() -> handler.handleUnexpected(ex, request))).isSameAs(ex);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+        assertThat(response.getHeaders().getAccept()).containsExactly(MediaType.APPLICATION_JSON);
+        assertThat(response.getBody().code()).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        assertThat(response.getBody().path()).isEqualTo("/drivers");
+        assertThat(response.getBody().errors()).isEmpty();
     }
 
     @Test
-    void unexpectedExceptionIsInternalErrorWithoutDetails() throws Exception {
+    void notAcceptableIs406WithJsonBody() {
+        ResponseEntity<ErrorResponse> response = handler.handleNotAcceptable(
+                new HttpMediaTypeNotAcceptableException(List.of(MediaType.APPLICATION_JSON)), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_ACCEPTABLE);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+        assertThat(response.getBody().code()).isEqualTo("NOT_ACCEPTABLE");
+    }
+
+    @Test
+    void otherSpringMvcExceptionKeepsItsStatusInTheCommonFormat() {
+        ResponseEntity<ErrorResponse> response = handler.handleUnexpected(
+                new ServletRequestBindingException("Missing header X-Secret"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody().code()).isEqualTo("REQUEST_NOT_PROCESSABLE");
+        assertThat(response.getBody().message()).isEqualTo("La solicitud no se pudo procesar");
+        assertThat(response.getBody().path()).isEqualTo("/drivers");
+    }
+
+    @Test
+    void unexpectedExceptionIsInternalErrorWithoutDetails() {
         ResponseEntity<ErrorResponse> response = handler.handleUnexpected(
                 new IllegalStateException("secret detail"), request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(response.getBody().code()).isEqualTo("INTERNAL_ERROR");
-        assertThat(response.getBody().message()).isEqualTo("Error interno del servidor");
+        assertThat(response.getBody().message()).isEqualTo("Error interno del servicio");
     }
 
     @Test
