@@ -36,7 +36,7 @@ Toda la configuración llega por variables de entorno (DEV_04). La columna **Loc
 | `FIREBASE_PROJECT_ID` | Proyecto de Firebase/Firestore. | `demo-conductores` | id del proyecto real de Firebase | Implementada |
 | `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. | `localhost:8180` (Compose usa `firestore-emulator:8080`) | vacío | Implementada |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Ruta, dentro del contenedor, al JSON de la cuenta de servicio de Firebase. | sin definir (emulador) | `/secrets/firebase-adminsdk.json` | Implementada |
-| `FIREBASE_CREDENTIALS_PATH` | Ruta en el host (EC2) al JSON de Firebase que se monta como volumen de solo lectura. | — | `/home/ubuntu/credentials/firebase-adminsdk.json` | Infra |
+| `FIREBASE_CREDENTIALS_PATH` | Ruta en el host (EC2) al JSON de Firebase que se monta como volumen de solo lectura. | — | `/home/ec2-user/credentials/firebase-adminsdk.json` | Infra |
 | `FIRESTORE_TIMEOUT` | Espera máxima de cada llamada a Firestore y del chequeo de `/health` (formato Duration de Spring). | `2s` | `2s` | Implementada |
 | `AWS_REGION` | Región de AWS para SNS/SQS. | `us-east-1` | `us-east-1` | Implementada |
 | `AWS_ACCESS_KEY_ID` | Credencial para LocalStack. | `test` | sin definir (rol IAM de la EC2) | Implementada |
