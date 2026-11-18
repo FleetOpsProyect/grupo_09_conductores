@@ -138,10 +138,10 @@ Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/
 
 En `/metrics`, las métricas de eventos son:
 
-**Publicación (outbox):**
-- `fleetops_driver_events_published_total{event_type}`: eventos publicados y marcados `SENT`.
-- `fleetops_driver_event_publish_failures_total{event_type}`: intentos fallidos de publicación en SNS.
-- `fleetops_outbox_pending_events`: eventos que siguen pendientes en Firestore.
+**Publicación (outbox, DEV_07-2):**
+- `drivers_events_published_total{event_type}`: eventos publicados y marcados `SENT`.
+- `drivers_events_publish_failures_total{event_type}`: intentos fallidos de publicación en SNS.
+- `drivers_outbox_pending`: eventos que siguen pendientes en Firestore.
 
 **Consumo SQS (DEV_07-3):**
 - `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed` o `duplicate`.
