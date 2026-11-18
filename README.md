@@ -253,8 +253,8 @@ así que el impacto es bajo. Para activarla, pasar el proyecto al plan Blaze y c
 
 ### Firestore no disponible
 
-Si Firestore no responde, `POST /drivers`, `GET /drivers/{id}`, `GET /drivers` y
-`PUT /drivers/{id}` responden `503` con el formato común de error:
+Si Firestore no responde, `POST /drivers`, `GET /drivers/{id}`, `GET /drivers`,
+`PUT /drivers/{id}` y `POST /drivers/{id}/medical-release` responden `503` con el formato común de error:
 
 ```json
 {
@@ -299,6 +299,8 @@ curl -i http://localhost:8085/drivers/$ID
 curl -i "http://localhost:8085/drivers?page=0&size=10"
 curl -i -X PUT http://localhost:8085/drivers/$ID -H 'Content-Type: application/json' \
   -d '{"full_name":"Ana M. Gómez","email":"ana@correo.com"}'
+curl -i -X POST http://localhost:8085/drivers/$ID/medical-release -H 'Content-Type: application/json' \
+  -d '{"notes":"Alta médica otorgada"}'
 
 docker start conductores_firestore
 ```
