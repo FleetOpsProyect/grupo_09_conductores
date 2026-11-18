@@ -26,40 +26,43 @@ Compose las variables llegan al contenedor mediante `env_file`.
 
 ### Variables de entorno
 
-| Variable | Descripción | Valor por defecto | Estado |
-| :--- | :--- | :--- | :--- |
-| `SERVER_PORT` | Puerto HTTP del servicio. | `8085` | Implementada |
-| `FIREBASE_PROJECT_ID` | Proyecto de Firebase/Firestore. | `demo-conductores` (local) | Implementada |
-| `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. Vacío en producción. | vacío | Implementada |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Ruta al JSON de la cuenta de servicio. En producción apunta a `/secrets/firebase-adminsdk.json` dentro del contenedor. | — | Implementada (SDK) |
-| `AWS_REGION` | Región de AWS para SNS/SQS. | `us-east-1` | Implementada |
-| `AWS_ACCESS_KEY_ID` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Prevista |
-| `AWS_SECRET_ACCESS_KEY` | Credencial falsa para LocalStack. No se define en producción (rol IAM). | `test` (local) | Prevista |
-| `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS (LocalStack en local). Vacío en producción para usar AWS real. | `http://localhost:4566` (local) | Prevista |
-| `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor (por ejemplo `-XX:MaxRAMPercentage=75.0`). | `-XX:MaxRAMPercentage=75.0` | Implementada |
-| `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | LocalStack local; ARN real en producción. | Implementada |
-| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | LocalStack local; URL real en producción. | Implementada |
-| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | LocalStack local; URL real en producción. | Implementada |
-| `FLEETOPS_CONSUMER_ENABLED` | Habilita o deshabilita el consumidor SQS de `fleetops_driver_queue`. Las pruebas lo apagan, salvo la de LocalStack. | `true` | Implementada |
-| `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | Implementada |
-| `OUTBOX_BATCH_SIZE` | Máximo de eventos pendientes por ciclo del publicador. | `50` | Implementada |
-| `OUTBOX_PUBLISHER_ENABLED` | Habilita o deshabilita el publicador periódico. | `true` | Implementada |
-| `DOCUMENTACION_URL` | URL del servicio de Documentación. | — | Prevista |
-| `DOCUMENTACION_TIMEOUT_MS` | Timeout hacia Documentación. | `2000` (2 s) | Prevista |
-| `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES` | Fallos consecutivos para abrir el Circuit Breaker. | `5` | Prevista |
-| `CIRCUIT_BREAKER_WAIT_DURATION_MS` | Espera con el circuito abierto. | `30000` (30 s) | Prevista |
-| `FIREBASE_CREDENTIALS_PATH` | Ruta en el host (EC2) al JSON de Firebase que se monta como volumen. | `./credentials/firebase-adminsdk.json` | Infra |
-| `DOCKERHUB_USER` | Usuario de Docker Hub (secreto `DOCKERHUB_USERNAME` en CI/CD). | — | Infra |
-| `IMAGE_NAME` | Nombre de la imagen Docker. | `ms-conductores` | Infra |
-| `IMAGE_TAG` | Etiqueta de la imagen (SHA corto del commit en CD; `latest` solo en main). | `latest` | Infra |
+Toda la configuración llega por variables de entorno (DEV_04). La columna **Local** es el valor de
+`.env.example`; la columna **Producción** es el de `.env.prod.example`, que se copia a `.env` en la EC2.
+`<cuenta>` es el id de la cuenta de AWS.
 
-Las variables marcadas como *Prevista* documentan integraciones pendientes, como el consumo SQS,
-Documentación y el Circuit Breaker. El publisher SNS usa el outbox de Firestore: guarda el evento
-con el conductor y publica los pendientes de forma periódica.
+| Variable | Descripción | Local | Producción | Estado |
+| :--- | :--- | :--- | :--- | :--- |
+| `SERVER_PORT` | Puerto HTTP del servicio. | `8085` | `8085` | Implementada |
+| `FIREBASE_PROJECT_ID` | Proyecto de Firebase/Firestore. | `demo-conductores` | id del proyecto real de Firebase | Implementada |
+| `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. | `localhost:8180` (Compose usa `firestore-emulator:8080`) | vacío | Implementada |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Ruta, dentro del contenedor, al JSON de la cuenta de servicio de Firebase. | sin definir (emulador) | `/secrets/firebase-adminsdk.json` | Implementada |
+| `FIREBASE_CREDENTIALS_PATH` | Ruta en el host (EC2) al JSON de Firebase que se monta como volumen de solo lectura. | — | `/home/ubuntu/credentials/firebase-adminsdk.json` | Infra |
+| `FIRESTORE_TIMEOUT` | Espera máxima de cada llamada a Firestore y del chequeo de `/health` (formato Duration de Spring). | `2s` | `2s` | Implementada |
+| `AWS_REGION` | Región de AWS para SNS/SQS. | `us-east-1` | `us-east-1` | Implementada |
+| `AWS_ACCESS_KEY_ID` | Credencial para LocalStack. | `test` | sin definir (rol IAM de la EC2) | Implementada |
+| `AWS_SECRET_ACCESS_KEY` | Credencial para LocalStack. | `test` | sin definir (rol IAM de la EC2) | Implementada |
+| `SPRING_CLOUD_AWS_ENDPOINT` | Endpoint de AWS. | `http://localhost:4566` (LocalStack) | vacío (AWS real) | Implementada |
+| `FLEETOPS_DRIVER_TOPIC_ARN` | ARN del topic `fleetops_driver_events`. | `arn:aws:sns:us-east-1:000000000000:fleetops_driver_events` | `arn:aws:sns:us-east-1:<cuenta>:fleetops_driver_events` | Implementada |
+| `FLEETOPS_DRIVER_QUEUE_URL` | URL de la cola `fleetops_driver_queue`. | `http://localhost:4566/000000000000/fleetops_driver_queue` | `https://sqs.us-east-1.amazonaws.com/<cuenta>/fleetops_driver_queue` | Implementada |
+| `FLEETOPS_DRIVER_DLQ_URL` | URL de la DLQ `fleetops_driver_dlq`. | `http://localhost:4566/000000000000/fleetops_driver_dlq` | `https://sqs.us-east-1.amazonaws.com/<cuenta>/fleetops_driver_dlq` | Implementada |
+| `FLEETOPS_CONSUMER_ENABLED` | Habilita el consumidor SQS de `fleetops_driver_queue`. Las pruebas lo apagan, salvo la de LocalStack. | `true` | `true` | Implementada |
+| `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | `2000` (2 s) | Implementada |
+| `OUTBOX_BATCH_SIZE` | Máximo de eventos pendientes por ciclo del publicador. | `50` | `50` | Implementada |
+| `OUTBOX_PUBLISHER_ENABLED` | Habilita el publicador periódico del outbox. | `true` | `true` | Implementada |
+| `DOCUMENTACION_URL` | URL del servicio de Documentación (G1). | pendiente: la entrega el equipo de Documentación | pendiente: la entrega el equipo de Documentación | Prevista (HU-07) |
+| `DOCUMENTACION_TIMEOUT_MS` | Timeout hacia Documentación. | `2000` (2 s) | `2000` (2 s) | Prevista (HU-07) |
+| `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES` | Fallos consecutivos para abrir el Circuit Breaker. | `5` | `5` | Prevista (HU-07) |
+| `CIRCUIT_BREAKER_WAIT_DURATION_MS` | Espera con el circuito abierto. | `30000` (30 s) | `30000` (30 s) | Prevista (HU-07) |
+| `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor. Viene fijada en el `Dockerfile`; solo se define para cambiarla. | `-XX:MaxRAMPercentage=75.0` (Dockerfile) | `-XX:MaxRAMPercentage=75.0` (Dockerfile) | Implementada |
+| `DOCKERHUB_USER` | Usuario de Docker Hub (secreto `DOCKERHUB_USERNAME` en CI/CD). | — | usuario de Docker Hub del equipo | Infra |
+| `IMAGE_NAME` | Nombre de la imagen Docker. | — | `ms-conductores` | Infra |
+| `IMAGE_TAG` | Etiqueta de la imagen. El CD publica el SHA del commit y `latest` (desde `main`), y en cada despliegue la reemplaza por el SHA. | — | `latest` | Infra |
 
-En producción `GOOGLE_APPLICATION_CREDENTIALS` apunta a `/secrets/firebase-adminsdk.json` (dentro
-del contenedor) y el archivo se monta como volumen de solo lectura (ver
-`docker-compose.prod.yml`).
+*Prevista (HU-07)*: el código todavía no la lee; la usará la integración con Documentación y su
+Circuit Breaker. *Infra*: la usa `docker-compose.prod.yml`, no la aplicación.
+
+En producción el JSON de Firebase se monta como volumen de solo lectura en
+`/secrets/firebase-adminsdk.json` (ver `docker-compose.prod.yml`).
 
 ## Ejecución local
 
