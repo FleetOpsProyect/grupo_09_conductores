@@ -24,6 +24,7 @@ import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -103,6 +104,32 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
             }
             throw ex;
         }
+    }
+
+    /**
+     * Guarda el alta médica de un conductor y registra opcionalmente el evento en el outbox
+     * en una sola transacción.
+     *
+     * @param driver conductor con el bloqueo médico removido
+     * @param notes observaciones o notas del alta médica (opcional, puede ser null)
+     * @param releasedAt momento en que se registró el alta
+     * @param outboxEvent evento a guardar en outbox_events, o null si no aplica
+     */
+    @Override
+    public void saveMedicalRelease(
+            Driver driver, String notes, OffsetDateTime releasedAt, OutboxEvent outboxEvent) {
+        DocumentReference driverRef = drivers().document(driver.getId().toString());
+        Map<String, Object> driverData = DriverDocument.fromDomainWithMedicalRelease(driver, notes, releasedAt);
+
+        await(firestore.runTransaction(transaction -> {
+            transaction.set(driverRef, driverData);
+            if (outboxEvent != null) {
+                DocumentReference outboxRef = firestore.collection(OutboxEventDocument.COLLECTION)
+                        .document(outboxEvent.envelope().eventId().toString());
+                transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
+            }
+            return null;
+        }));
     }
 
     /**

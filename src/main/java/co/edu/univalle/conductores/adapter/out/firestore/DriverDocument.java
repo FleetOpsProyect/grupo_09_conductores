@@ -38,6 +38,22 @@ final class DriverDocument {
     }
 
     /**
+     * Convierte un conductor del dominio incluyendo notas y fecha de alta médica.
+     *
+     * @param driver conductor del dominio
+     * @param notes observaciones del alta médica (puede ser null)
+     * @param releasedAt momento del alta médica
+     * @return campos del documento para Firestore
+     */
+    static Map<String, Object> fromDomainWithMedicalRelease(
+            Driver driver, String notes, OffsetDateTime releasedAt) {
+        Map<String, Object> data = fromDomain(driver);
+        data.put("medical_release_notes", notes);
+        data.put("medical_released_at", releasedAt != null ? releasedAt.toString() : null);
+        return data;
+    }
+
+    /**
      * Reconstruye el conductor del dominio. El campo status se ignora: se recalcula desde los bloqueos.
      *
      * @param data campos del documento

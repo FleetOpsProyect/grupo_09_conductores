@@ -204,6 +204,71 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
                 .document(eventId.toString()).get().get().exists()).isFalse();
     }
 
+    @Test
+    void saveMedicalReleaseWithActiveDriverStoresNotesDateAndOutboxEvent() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        driver.applyMedicalBlock(NOW.plusHours(1));
+        repository.save(driver);
+
+        driver.releaseMedicalBlock(NOW.plusHours(2));
+        OutboxEvent outboxEvent = pendingActivationEvent(driver);
+        repository.saveMedicalRelease(driver, "Conductor recuperado", NOW.plusHours(2), outboxEvent);
+
+        Driver found = repository.findById(driver.getId()).orElseThrow();
+        assertThat(found.getStatus()).isEqualTo(DriverStatus.ACTIVE);
+        assertThat(found.isMedicalBlock()).isFalse();
+
+        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
+                .document(driver.getId().toString()).get().get();
+        assertThat(doc.getString("medical_release_notes")).isEqualTo("Conductor recuperado");
+        assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
+
+        DocumentSnapshot outbox = firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(outboxEvent.envelope().eventId().toString()).get().get();
+        assertThat(outbox.exists()).isTrue();
+        assertThat(outbox.getString(OutboxEventDocument.EVENT_TYPE))
+                .isEqualTo(DriverEventType.DRIVER_ACTIVATED.value());
+    }
+
+    @Test
+    void saveMedicalReleaseWithDocumentBlockLeavesInactiveAndDoesNotStoreOutboxEvent() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), true);
+        createDriverWithOutbox(driver);
+        driver.applyMedicalBlock(NOW.plusHours(1));
+        repository.save(driver);
+
+        driver.releaseMedicalBlock(NOW.plusHours(2));
+        repository.saveMedicalRelease(driver, "Apto médico", NOW.plusHours(2), null);
+
+        Driver found = repository.findById(driver.getId()).orElseThrow();
+        assertThat(found.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        assertThat(found.isMedicalBlock()).isFalse();
+        assertThat(found.isDocumentBlock()).isTrue();
+
+        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
+                .document(driver.getId().toString()).get().get();
+        assertThat(doc.getString("medical_release_notes")).isEqualTo("Apto médico");
+        assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
+    }
+
+    @Test
+    void saveMedicalReleaseWithoutNotesStoresNullNotesAndValidDate() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        driver.applyMedicalBlock(NOW.plusHours(1));
+        repository.save(driver);
+
+        driver.releaseMedicalBlock(NOW.plusHours(2));
+        OutboxEvent outboxEvent = pendingActivationEvent(driver);
+        repository.saveMedicalRelease(driver, null, NOW.plusHours(2), outboxEvent);
+
+        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
+                .document(driver.getId().toString()).get().get();
+        assertThat(doc.getString("medical_release_notes")).isNull();
+        assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
+    }
+
     private OutboxEvent createDriverWithOutbox(Driver driver) {
         OutboxEvent outboxEvent = pendingActivationEvent(driver);
         repository.createWithUniquenessAndOutbox(driver, outboxEvent);
