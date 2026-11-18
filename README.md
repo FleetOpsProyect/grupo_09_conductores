@@ -186,6 +186,10 @@ Firestore.
 
 Este índice cubre el listado con filtro por estado y orden por fecha de creación.
 
+El emulador no exige este índice, pero Firestore real sí. Despliégalo con
+`firebase deploy --only firestore:indexes`; de lo contrario, el listado filtrado por `status`
+falla.
+
 ### Retención de `processed_events` (TTL)
 
 Cada documento de `processed_events` guarda `event_id`, `event_type`, `driver_id`, `processed_at` y
@@ -200,9 +204,9 @@ La política TTL no se versiona en `firestore.indexes.json`. Se crea una vez por
 Firestore borra los documentos vencidos normalmente dentro de las 24 horas siguientes a `expire_at`.
 El emulador no aplica TTL.
 
-El emulador no exige este índice, pero Firestore real sí. Despliégalo con
-`firebase deploy --only firestore:indexes`; de lo contrario, el listado filtrado por `status`
-falla.
+**Limitación actual:** el proyecto de Firebase está en el plan Spark, que no ejecuta borrados por TTL,
+así que la política no está activa y la colección crece sin límite. Cada documento ocupa unos 200 bytes,
+así que el impacto es bajo. Para activarla, pasar el proyecto al plan Blaze y crear la política.
 
 ### Firestore no disponible
 
@@ -469,8 +473,11 @@ perfil de instancia (rol IAM).
 
 | Puerto | Protocolo | Fuente | Nota |
 | :--- | :--- | :--- | :--- |
-| 22 | TCP | IP del pipeline (SSH) | Acceso del workflow CD |
-| 8085 | TCP | `0.0.0.0/0` | **Temporal**: se restringe al API Gateway, servicios internos y Prometheus cuando el Gateway exista |
+| 22 | TCP | `0.0.0.0/0` | SSH del workflow CD y del equipo. Excepción documentada: las IPs de GitHub Actions cambian |
+| 8085 | TCP | `0.0.0.0/0` | **Limitación**: API Gateway llega sin VPC Link, así que no se puede limitar a su origen |
+
+Las dos reglas están abiertas a Internet y son limitaciones conocidas. Para cerrar el 8085 hace falta un
+VPC Link entre API Gateway y la EC2; para cerrar el 22, desplegar con AWS Systems Manager en vez de SSH.
 
 ### Elastic IP
 
