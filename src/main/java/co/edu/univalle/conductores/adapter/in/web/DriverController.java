@@ -137,23 +137,27 @@ public class DriverController {
      * @param id driver id as received in the path
      * @return driver found
      */
-    @Operation(summary = "Consultar un conductor por id (HU-02)",
+    @Operation(summary = "Consultar un conductor por id (HU-02, HU-03)",
         description = """
             Devuelve el conductor con su status actual. Un conductor inactivo \
             (INACTIVE_EXPIRED_DOCUMENTS o MEDICAL_HOLD_INCIDENT) se devuelve con 200, no con 404. \
             Las llamadas internas de otros microservicios, sin JWT, reciben la misma respuesta.
 
-            **Fase 2, no implementado (HU-03, regla "solo el propio"):** si cognito:groups incluye \
-            Conductor, el claim custom:driver_id debe ser igual al {id} de la ruta; si es distinto \
-            o no viene en el token, se responde 403 ACCESS_DENIED sin consultar la base de datos. \
-            En el MVP cualquier token válido consulta cualquier id.""")
+            **Roles (HU-03, regla "solo el propio"):** por API Gateway, FLEET_ADMIN consulta \
+            cualquier id; DRIVER solo el suyo, es decir, cuando el claim custom:driver_id de su ID \
+            token es igual al {id} de la ruta. Lo aplica el authorizer del Gateway: si el id no es el \
+            suyo o el token no trae custom:driver_id, responde 403 sin que la petición llegue al \
+            servicio, así que la respuesta no revela si ese id existe. El servicio no valida roles.""")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Conductor encontrado"),
+        @ApiResponse(responseCode = "401", description = GATEWAY_401,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "403",
             description = """
-                ACCESS_DENIED: fase 2, no implementado en el MVP. Un conductor intenta consultar \
-                un registro que no es el suyo, o su token no trae custom:driver_id.""",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+                Lo responde API Gateway, no el servicio: el token es inválido o expiró; el grupo no \
+                es FLEET_ADMIN ni DRIVER; o es DRIVER y custom:driver_id falta o no es igual al {id}. \
+                Cuerpo {"message": "Forbidden"}, que no sigue el formato común de error.""",
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "404",
             description = """
                 DRIVER_NOT_FOUND: no existe un conductor con ese id, o el id no es un UUID \

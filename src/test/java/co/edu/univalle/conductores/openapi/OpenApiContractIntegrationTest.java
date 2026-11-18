@@ -52,7 +52,7 @@ class OpenApiContractIntegrationTest extends BaseIntegrationTest {
     void responseCodesMatchUserStories() {
         assertThat(codes("/drivers", "post")).containsExactlyInAnyOrder("201", "400", "401", "403", "409", "503");
         assertThat(codes("/drivers", "get")).containsExactlyInAnyOrder("200", "400", "401", "403", "503");
-        assertThat(codes("/drivers/{id}", "get")).containsExactlyInAnyOrder("200", "403", "404", "503");
+        assertThat(codes("/drivers/{id}", "get")).containsExactlyInAnyOrder("200", "401", "403", "404", "503");
         assertThat(codes("/drivers/{id}", "put")).containsExactlyInAnyOrder("200", "400", "401", "403", "404", "503");
     }
 
@@ -89,10 +89,15 @@ class OpenApiContractIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void ownRecordRuleIsMarkedAsPhaseTwo() {
-        String description = spec.at("/paths/~1drivers~1{id}/get/description").asText();
-        assertThat(description).contains("solo el propio", "custom:driver_id", "403", "ACCESS_DENIED",
-                "Fase 2, no implementado");
+    void ownRecordRuleIsDocumentedAsAppliedByTheGateway() {
+        String pointer = "/paths/~1drivers~1{id}/get";
+        assertThat(spec.at(pointer + "/description").asText())
+                .contains("solo el propio", "custom:driver_id", "FLEET_ADMIN", "DRIVER", "403", "authorizer")
+                .doesNotContain("Fase 2", "ACCESS_DENIED");
+        assertThat(spec.at(pointer + "/responses/403/description").asText())
+                .contains("API Gateway", "custom:driver_id");
+        assertThat(spec.at(pointer + "/responses/403/content").toString()).contains("GatewayErrorResponse");
+        assertThat(spec.at(pointer + "/responses/401/content").toString()).contains("GatewayErrorResponse");
     }
 
     private Set<String> codes(String path, String method) {
