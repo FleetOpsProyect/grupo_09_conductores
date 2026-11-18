@@ -787,6 +787,88 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(drivers.get(0).getId()).isEqualTo(firstId);
     }
 
+    @Test
+    void medicalReleaseReturns200WithUpdatedStatus() throws Exception {
+        String documentNumber = uniqueDocument();
+        String id = MAPPER.readTree(register(documentNumber).getBody()).get("id").asText();
+        UUID driverId = UUID.fromString(id);
+
+        Driver driver = driverRepository.findById(driverId).orElseThrow();
+        driver.applyMedicalBlock(OffsetDateTime.now(ZoneOffset.ofHours(-5)));
+        driverRepository.save(driver);
+
+        ResponseEntity<String> response = medicalRelease(id, "{\"notes\":\"Alta otorgada\"}");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
+        assertThat(body.get("id").asText()).isEqualTo(id);
+        assertThat(body.has("notes")).isFalse();
+        assertThat(body.has("medical_release_notes")).isFalse();
+    }
+
+    @Test
+    void medicalReleaseWithoutMedicalBlockReturns409StatusNotAllowed() throws Exception {
+        String documentNumber = uniqueDocument();
+        String id = MAPPER.readTree(register(documentNumber).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = medicalRelease(id, "{\"notes\":\"Alta\"}");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("STATUS_NOT_ALLOWED");
+    }
+
+    @Test
+    void medicalReleaseWithNonExistentIdReturns404NotFound() throws Exception {
+        String missingId = UUID.randomUUID().toString();
+        ResponseEntity<String> response = medicalRelease(missingId, "{\"notes\":\"Alta\"}");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertDriverNotFound(response, missingId);
+    }
+
+    @Test
+    void medicalReleaseWithInvalidNotesLengthReturns400InvalidData() throws Exception {
+        String documentNumber = uniqueDocument();
+        String id = MAPPER.readTree(register(documentNumber).getBody()).get("id").asText();
+
+        String longNotes = "{\"notes\":\"" + "a".repeat(501) + "\"}";
+        ResponseEntity<String> response = medicalRelease(id, longNotes);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+    }
+
+    @Test
+    void medicalReleaseWithoutBodyReturns200() throws Exception {
+        String documentNumber = uniqueDocument();
+        String id = MAPPER.readTree(register(documentNumber).getBody()).get("id").asText();
+        UUID driverId = UUID.fromString(id);
+
+        Driver driver = driverRepository.findById(driverId).orElseThrow();
+        driver.applyMedicalBlock(OffsetDateTime.now(ZoneOffset.ofHours(-5)));
+        driverRepository.save(driver);
+
+        ResponseEntity<String> response = medicalRelease(id, null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
+    }
+
+    private ResponseEntity<String> medicalRelease(String id, String body) {
+        var requestSpec = client().post().uri("/{id}/medical-release", id);
+        if (body != null) {
+            return requestSpec.contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toEntity(String.class);
+        }
+        return requestSpec.retrieve().toEntity(String.class);
+    }
+
     private ResponseEntity<String> register(String documentNumber) {
         String body = """
                 {"full_name":"Carlos Pérez","document_number":"%s","email":"carlos@correo.com","phone":"3001234567"}

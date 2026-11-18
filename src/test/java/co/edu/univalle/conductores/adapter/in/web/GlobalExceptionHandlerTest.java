@@ -7,6 +7,7 @@ import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
+import co.edu.univalle.conductores.domain.StatusNotAllowedException;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
@@ -218,6 +219,18 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().code()).isEqualTo("SERVICE_UNAVAILABLE");
         assertThat(response.getBody().message()).isEqualTo("Servicio temporalmente no disponible, intente nuevamente");
         assertThat(response.getBody().path()).isEqualTo("/drivers");
+        assertThat(response.getBody().errors()).isEmpty();
+    }
+
+    @Test
+    void statusNotAllowedReturnsConflict() {
+        StatusNotAllowedException ex =
+                new StatusNotAllowedException("El conductor no tiene un bloqueo médico activo");
+        ResponseEntity<ErrorResponse> response = handler.handleStatusNotAllowed(ex, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().code()).isEqualTo("STATUS_NOT_ALLOWED");
+        assertThat(response.getBody().message()).isEqualTo("El conductor no tiene un bloqueo médico activo");
         assertThat(response.getBody().errors()).isEmpty();
     }
 

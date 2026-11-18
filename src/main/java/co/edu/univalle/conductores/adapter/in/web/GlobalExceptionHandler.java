@@ -6,6 +6,7 @@ import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.InvalidDriverException;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
+import co.edu.univalle.conductores.domain.StatusNotAllowedException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -71,6 +72,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateDocumentException.class)
     public ResponseEntity<ErrorResponse> handleDuplicate(DuplicateDocumentException ex, HttpServletRequest request) {
         return build(HttpStatus.CONFLICT, "DUPLICATE_DRIVER", ex.getMessage(), request, List.of());
+    }
+
+    /**
+     * Estado no permitido para la operación (409).
+     *
+     * @param ex excepción lanzada
+     * @param request petición actual
+     * @return error común
+     */
+    @ExceptionHandler(StatusNotAllowedException.class)
+    public ResponseEntity<ErrorResponse> handleStatusNotAllowed(
+            StatusNotAllowedException ex, HttpServletRequest request) {
+        return build(HttpStatus.CONFLICT, "STATUS_NOT_ALLOWED", ex.getMessage(), request, List.of());
     }
 
     /**
