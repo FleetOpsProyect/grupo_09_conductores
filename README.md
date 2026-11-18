@@ -114,6 +114,7 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 | `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200`, `404` (también `404` si el id no es un UUID) o `503` (y `401`/`403` desde API Gateway). `FLEET_ADMIN` cualquier id; `DRIVER` solo el suyo (HU-03). |
 | `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
+| `POST` | `/drivers/{id}/medical-release` | Registra el alta médica de un conductor (HU-10). Responde `200`, `400`, `404`, `409` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
 | `GET` | `/metrics` | Métricas en formato Prometheus. |
 | `GET` | `/info` | Información del servicio. |
@@ -252,8 +253,8 @@ así que el impacto es bajo. Para activarla, pasar el proyecto al plan Blaze y c
 
 ### Firestore no disponible
 
-Si Firestore no responde, `POST /drivers`, `GET /drivers/{id}`, `GET /drivers` y
-`PUT /drivers/{id}` responden `503` con el formato común de error:
+Si Firestore no responde, `POST /drivers`, `GET /drivers/{id}`, `GET /drivers`,
+`PUT /drivers/{id}` y `POST /drivers/{id}/medical-release` responden `503` con el formato común de error:
 
 ```json
 {
@@ -298,6 +299,8 @@ curl -i http://localhost:8085/drivers/$ID
 curl -i "http://localhost:8085/drivers?page=0&size=10"
 curl -i -X PUT http://localhost:8085/drivers/$ID -H 'Content-Type: application/json' \
   -d '{"full_name":"Ana M. Gómez","email":"ana@correo.com"}'
+curl -i -X POST http://localhost:8085/drivers/$ID/medical-release -H 'Content-Type: application/json' \
+  -d '{"notes":"Alta médica otorgada"}'
 
 docker start conductores_firestore
 ```

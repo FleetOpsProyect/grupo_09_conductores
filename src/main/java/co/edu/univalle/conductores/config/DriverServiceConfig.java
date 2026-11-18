@@ -4,6 +4,7 @@ import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
+import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
@@ -16,6 +17,7 @@ import co.edu.univalle.conductores.application.service.ListDriverService;
 import co.edu.univalle.conductores.application.service.OutboxPublisher;
 import co.edu.univalle.conductores.application.service.ProcessDriverEventService;
 import co.edu.univalle.conductores.application.service.RegisterDriverService;
+import co.edu.univalle.conductores.application.service.ReleaseMedicalBlockService;
 import co.edu.univalle.conductores.application.service.UpdateDriverService;
 import java.time.Clock;
 import java.time.ZoneId;
@@ -82,6 +84,18 @@ public class DriverServiceConfig {
     @Bean
     public UpdateDriver updateDriver(DriverRepository repository, Clock clock) {
         return new UpdateDriverService(repository, clock);
+    }
+
+    /**
+     * Caso de uso de registro de alta médica.
+     *
+     * @param repository repositorio de conductores
+     * @param clock      reloj del proyecto
+     * @return implementación de ReleaseMedicalBlock
+     */
+    @Bean
+    public ReleaseMedicalBlock releaseMedicalBlock(DriverRepository repository, Clock clock) {
+        return new ReleaseMedicalBlockService(repository, clock);
     }
 
     /**

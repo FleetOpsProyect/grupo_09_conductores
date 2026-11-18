@@ -54,11 +54,15 @@ class OpenApiContractIntegrationTest extends BaseIntegrationTest {
         assertThat(codes("/drivers", "get")).containsExactlyInAnyOrder("200", "400", "401", "403", "503");
         assertThat(codes("/drivers/{id}", "get")).containsExactlyInAnyOrder("200", "401", "403", "404", "503");
         assertThat(codes("/drivers/{id}", "put")).containsExactlyInAnyOrder("200", "400", "401", "403", "404", "503");
+        assertThat(codes("/drivers/{id}/medical-release", "post"))
+                .containsExactlyInAnyOrder("200", "400", "401", "403", "404", "409", "503");
     }
 
     @Test
     void fleetAdminRoutesDocumentGatewayResponsesInsteadOfPhaseTwo() {
-        for (String operation : new String[] {"~1drivers/post", "~1drivers/get", "~1drivers~1{id}/put"}) {
+        for (String operation : new String[] {
+            "~1drivers/post", "~1drivers/get", "~1drivers~1{id}/put",
+            "~1drivers~1{id}~1medical-release/post"}) {
             String pointer = "/paths/" + operation;
             assertThat(spec.at(pointer + "/description").asText())
                     .as(operation)

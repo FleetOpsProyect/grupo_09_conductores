@@ -4,11 +4,13 @@ import co.edu.univalle.conductores.adapter.in.web.dto.DriverPageResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.GatewayErrorResponse;
+import co.edu.univalle.conductores.adapter.in.web.dto.MedicalReleaseRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.RegisterDriverRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.UpdateDriverRequest;
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
+import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
@@ -71,6 +73,7 @@ public class DriverController {
     private final GetDriver getDriver;
     private final ListDriver listDriver;
     private final UpdateDriver updateDriver;
+    private final ReleaseMedicalBlock releaseMedicalBlock;
 
     /**
      * Crea el controlador con los puertos de entrada.
@@ -79,13 +82,15 @@ public class DriverController {
      * @param getDriver caso de uso de consulta
      * @param listDriver caso de uso de listado
      * @param updateDriver caso de uso de actualización
+     * @param releaseMedicalBlock caso de uso de alta médica
      */
     public DriverController(RegisterDriver registerDriver, GetDriver getDriver,
-            ListDriver listDriver, UpdateDriver updateDriver) {
+            ListDriver listDriver, UpdateDriver updateDriver, ReleaseMedicalBlock releaseMedicalBlock) {
         this.registerDriver = registerDriver;
         this.getDriver = getDriver;
         this.listDriver = listDriver;
         this.updateDriver = updateDriver;
+        this.releaseMedicalBlock = releaseMedicalBlock;
     }
 
     /**
@@ -254,6 +259,58 @@ public class DriverController {
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
                 request.fullName(), request.email(), request.phone()));
         return DriverResponse.from(driver);
+    }
+
+    /**
+     * Registra el alta médica de un conductor.
+     *
+     * @param id identificador del conductor
+     * @param correlationIdHeader encabezado X-Correlation-Id opcional
+     * @param request datos opcionales del alta médica
+     * @return conductor actualizado con código 200
+     */
+    @Operation(summary = "Registrar alta médica de un conductor (HU-10)",
+        description = """
+            Registra el alta médica de un conductor para rehabilitar su estado operativo. \
+            Si el conductor no tiene bloqueo por documentos vencidos, queda en estado ACTIVE \
+            y se genera el evento driver_activated_event. Si tiene bloqueo por documentos \
+            vencidos, queda en estado INACTIVE_EXPIRED_DOCUMENTS y no se genera evento. \
+            El cuerpo es opcional y permite registrar notas médicas.
+
+            """ + FLEET_ADMIN_ONLY)
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Alta médica registrada exitosamente"),
+        @ApiResponse(responseCode = "400",
+            description = """
+                INVALID_DATA: las notas superan el límite permitido. \
+                INVALID_JSON: el cuerpo no es un JSON válido.""",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "401", description = GATEWAY_401,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
+            content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
+        @ApiResponse(responseCode = "404",
+            description = "DRIVER_NOT_FOUND: no existe un conductor con ese id o el id no es un UUID válido",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "409",
+            description = "STATUS_NOT_ALLOWED: el conductor no tiene un bloqueo médico activo",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+        @ApiResponse(responseCode = "503",
+            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @PostMapping("/{id}/medical-release")
+    public ResponseEntity<DriverResponse> releaseMedical(
+            @PathVariable String id,
+            @RequestHeader(value = "X-Correlation-Id", required = false) String correlationIdHeader,
+            @Valid @RequestBody(required = false) MedicalReleaseRequest request) {
+        UUID correlationId = resolveCorrelationId(correlationIdHeader);
+        String notes = request != null ? request.notes() : null;
+        Driver driver = releaseMedicalBlock.release(parseId(id),
+                new ReleaseMedicalBlock.Command(notes, correlationId));
+        return ResponseEntity.ok()
+                .header("X-Correlation-Id", correlationId.toString())
+                .body(DriverResponse.from(driver));
     }
 
     /**

@@ -4,6 +4,7 @@ import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
+import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -45,4 +46,15 @@ public interface DriverRepository {
      * @return una página de conductores
      */
     PageResult<Driver> findAll(DriverStatus status, int page, int size);
+
+    /**
+     * Guarda el alta médica de un conductor y registra opcionalmente el evento en el outbox
+     * en una sola transacción.
+     *
+     * @param driver conductor con el bloqueo médico removido
+     * @param notes observaciones o notas del alta médica (opcional, puede ser null)
+     * @param releasedAt momento en que se registró el alta
+     * @param outboxEvent evento a guardar en outbox_events, o null si no aplica
+     */
+    void saveMedicalRelease(Driver driver, String notes, OffsetDateTime releasedAt, OutboxEvent outboxEvent);
 }

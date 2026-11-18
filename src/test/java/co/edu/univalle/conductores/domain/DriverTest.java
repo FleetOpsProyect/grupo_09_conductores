@@ -173,6 +173,45 @@ class DriverTest {
         assertThat(driver.getUpdatedAt()).isEqualTo(later);
     }
 
+    @Test
+    void releaseMedicalBlockLeavesDriverActiveWhenNoDocumentBlock() {
+        Driver driver = restored(false, true);
+        OffsetDateTime releaseTime = NOW.plusHours(3);
+
+        driver.releaseMedicalBlock(releaseTime);
+
+        assertThat(driver.isMedicalBlock()).isFalse();
+        assertThat(driver.isDocumentBlock()).isFalse();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
+        assertThat(driver.getUpdatedAt()).isEqualTo(releaseTime);
+    }
+
+    @Test
+    void releaseMedicalBlockLeavesDriverInactiveWhenDocumentBlockPresent() {
+        Driver driver = restored(true, true);
+        OffsetDateTime releaseTime = NOW.plusHours(3);
+
+        driver.releaseMedicalBlock(releaseTime);
+
+        assertThat(driver.isMedicalBlock()).isFalse();
+        assertThat(driver.isDocumentBlock()).isTrue();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        assertThat(driver.getUpdatedAt()).isEqualTo(releaseTime);
+    }
+
+    @Test
+    void releaseMedicalBlockThrowsWhenNoMedicalBlockActive() {
+        Driver driver = restored(false, false);
+
+        assertThatThrownBy(() -> driver.releaseMedicalBlock(NOW.plusHours(1)))
+                .isInstanceOf(StatusNotAllowedException.class)
+                .hasMessageContaining("no tiene un bloqueo médico activo");
+
+        assertThat(driver.isMedicalBlock()).isFalse();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
+        assertThat(driver.getUpdatedAt()).isEqualTo(NOW);
+    }
+
     private static Driver restored(boolean documentBlock, boolean medicalBlock) {
         return Driver.restore(UUID.randomUUID(), "1144056789", "Carlos Pérez", "carlos@correo.com", null,
                 documentBlock, medicalBlock, NOW, NOW);

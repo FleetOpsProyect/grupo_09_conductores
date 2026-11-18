@@ -38,6 +38,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -62,7 +63,7 @@ class FirestoreDriverAdapterTest {
             null, OffsetDateTime.of(2026, 11, 5, 10, 0, 0, 0, ZoneOffset.ofHours(-5)));
 
     /** Repository operations that call Firestore. */
-    enum Operation { CREATE, FIND_BY_ID, FIND_ALL, SAVE }
+    enum Operation { CREATE, FIND_BY_ID, FIND_ALL, SAVE, SAVE_MEDICAL_RELEASE }
 
     @Mock
     private Firestore firestore;
@@ -299,6 +300,65 @@ class FirestoreDriverAdapterTest {
         assertThat(result.total()).isZero();
     }
 
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void saveMedicalReleaseWritesDriverAndOutboxInTransaction() throws Exception {
+        when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
+        when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+        when(firestore.collection(OutboxEventDocument.COLLECTION)).thenReturn(outboxEvents);
+        when(outboxEvents.document(any(String.class))).thenReturn(outboxDocument);
+
+        ArgumentCaptor<Transaction.Function> functionCaptor =
+                ArgumentCaptor.forClass(Transaction.Function.class);
+        ApiFuture future = mock(ApiFuture.class);
+        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenReturn(null);
+        when(firestore.runTransaction(functionCaptor.capture())).thenReturn(future);
+
+        OffsetDateTime releasedAt =
+                OffsetDateTime.of(2026, 11, 18, 14, 0, 0, 0, ZoneOffset.ofHours(-5));
+        OutboxEvent event = pendingActivationEvent();
+        adapter.saveMedicalRelease(DRIVER, "Alta médica completa", releasedAt, event);
+
+        Transaction transaction = mock(Transaction.class);
+        functionCaptor.getValue().updateCallback(transaction);
+
+        ArgumentCaptor<Map<String, Object>> driverDataCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(transaction).set(eq(document), driverDataCaptor.capture());
+        Map<String, Object> data = driverDataCaptor.getValue();
+        assertThat(data.get("medical_release_notes")).isEqualTo("Alta médica completa");
+        assertThat(data.get("medical_released_at")).isEqualTo(releasedAt.toString());
+
+        verify(transaction).set(eq(outboxDocument), anyMap());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void saveMedicalReleaseWithoutOutboxDoesNotWriteOutboxInTransaction() throws Exception {
+        when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
+        when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+
+        ArgumentCaptor<Transaction.Function> functionCaptor =
+                ArgumentCaptor.forClass(Transaction.Function.class);
+        ApiFuture future = mock(ApiFuture.class);
+        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenReturn(null);
+        when(firestore.runTransaction(functionCaptor.capture())).thenReturn(future);
+
+        OffsetDateTime releasedAt =
+                OffsetDateTime.of(2026, 11, 18, 14, 0, 0, 0, ZoneOffset.ofHours(-5));
+        adapter.saveMedicalRelease(DRIVER, null, releasedAt, null);
+
+        Transaction transaction = mock(Transaction.class);
+        functionCaptor.getValue().updateCallback(transaction);
+
+        ArgumentCaptor<Map<String, Object>> driverDataCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(transaction).set(eq(document), driverDataCaptor.capture());
+        Map<String, Object> data = driverDataCaptor.getValue();
+        assertThat(data.get("medical_release_notes")).isNull();
+        assertThat(data.get("medical_released_at")).isEqualTo(releasedAt.toString());
+
+        verify(firestore, never()).collection(OutboxEventDocument.COLLECTION);
+    }
+
     /**
      * Stubs the SDK chain of the operation and returns the first future the adapter waits for.
      */
@@ -330,6 +390,12 @@ class FirestoreDriverAdapterTest {
                 when(countQuery.get()).thenReturn((ApiFuture) future);
                 stubPageQuery();
             }
+            case SAVE_MEDICAL_RELEASE -> {
+                when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
+                when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+                when(firestore.runTransaction(any(Transaction.Function.class)))
+                        .thenReturn((ApiFuture) future);
+            }
         }
         return future;
     }
@@ -353,6 +419,8 @@ class FirestoreDriverAdapterTest {
             case FIND_BY_ID -> adapter.findById(DRIVER.getId());
             case SAVE -> adapter.save(DRIVER);
             case FIND_ALL -> adapter.findAll(null, 0, 10);
+            case SAVE_MEDICAL_RELEASE -> adapter.saveMedicalRelease(
+                    DRIVER, "Notas de prueba", OffsetDateTime.now(), pendingActivationEvent());
         }
     }
 

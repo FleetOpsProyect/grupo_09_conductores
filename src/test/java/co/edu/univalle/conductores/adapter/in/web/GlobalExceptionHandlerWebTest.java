@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
+import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
@@ -72,6 +73,9 @@ class GlobalExceptionHandlerWebTest {
 
     @MockitoBean
     private UpdateDriver updateDriver;
+
+    @MockitoBean
+    private ReleaseMedicalBlock releaseMedicalBlock;
 
     @Test
     void sliceUsesSnakeCaseNaming() {

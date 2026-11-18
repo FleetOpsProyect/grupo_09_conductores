@@ -126,6 +126,22 @@ public class Driver {
     }
 
     /**
+     * Remueve el bloqueo médico cuando se registra el alta médica del conductor.
+     * Si el conductor no tiene un bloqueo médico activo, la operación no está permitida.
+     * No modifica el bloqueo por documentos vencidos.
+     *
+     * @param now momento en que se registra el alta médica
+     * @throws StatusNotAllowedException si el conductor no tiene un bloqueo médico activo
+     */
+    public void releaseMedicalBlock(OffsetDateTime now) {
+        if (!this.medicalBlock) {
+            throw new StatusNotAllowedException("El conductor no tiene un bloqueo médico activo");
+        }
+        this.medicalBlock = false;
+        this.updatedAt = now;
+    }
+
+    /**
      * Estado calculado con prioridad médico > documentos > activo.
      *
      * @return el estado actual del conductor
