@@ -35,7 +35,7 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).contains("jvm_memory_used_bytes");
-        assertThat(response.getBody()).contains("fleetops_outbox_pending_events");
+        assertThat(response.getBody()).contains("drivers_outbox_pending");
     }
 
     @Test
@@ -54,9 +54,10 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody())
-                .contains("fleetops_driver_events_published_total")
-                .contains("fleetops_driver_event_publish_failures_total")
-                .contains("fleetops_outbox_pending_events");
+                .contains("drivers_events_published_total{event_type=\"driver_activated_event\"")
+                .contains("drivers_events_publish_failures_total{event_type=\"driver_activated_event\"")
+                .contains("drivers_outbox_pending 3.0")
+                .doesNotContain("fleetops_");
     }
 
     @Test

@@ -12,6 +12,7 @@ import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
+import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -86,7 +87,7 @@ class GlobalExceptionHandlerWebTest {
         JsonNode body = jsonMapper.readTree(response.getContentAsString());
         assertCommonFormat(body);
         assertThat(body.get("code").asString()).isEqualTo("ROUTE_NOT_FOUND");
-        assertThat(body.get("message").asString()).isEqualTo("Ruta no encontrada");
+        assertThat(body.get("message").asString()).isEqualTo("La ruta solicitada no existe");
         assertThat(body.get("path").asString()).isEqualTo("/does_not_exist");
         assertThat(OffsetDateTime.parse(body.get("timestamp").asString()).getOffset().getId())
                 .isEqualTo("-05:00");
@@ -106,6 +107,42 @@ class GlobalExceptionHandlerWebTest {
     }
 
     @Test
+    void postWithTextPlainReturns415InCommonFormat() throws Exception {
+        MockHttpServletResponse response = perform(post("/drivers")
+                .contentType(MediaType.TEXT_PLAIN)
+                .content(DRIVER_JSON));
+
+        assertThat(response.getStatus()).isEqualTo(415);
+        assertThat(MediaType.parseMediaType(response.getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON))
+                .isTrue();
+        JsonNode body = jsonMapper.readTree(response.getContentAsString());
+        assertCommonFormat(body);
+        assertThat(body.get("code").asString()).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        assertThat(body.get("message").asString()).isEqualTo("Tipo de contenido no soportado; use application/json");
+        assertThat(body.get("path").asString()).isEqualTo("/drivers");
+        assertThat(response.getHeader(HttpHeaders.ACCEPT)).contains("application/json");
+    }
+
+    @Test
+    void getWithUnsupportedAcceptReturns406InCommonFormat() throws Exception {
+        when(getDriver.get(DRIVER_ID)).thenReturn(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez",
+                "carlos@correo.com", null, false, false, OffsetDateTime.now(), OffsetDateTime.now()));
+
+        MockHttpServletResponse response = perform(get("/drivers/" + DRIVER_ID)
+                .accept(MediaType.parseMediaType("text/csv")));
+
+        assertThat(response.getStatus()).isEqualTo(406);
+        assertThat(MediaType.parseMediaType(response.getContentType()).isCompatibleWith(MediaType.APPLICATION_JSON))
+                .isTrue();
+        JsonNode body = jsonMapper.readTree(response.getContentAsString());
+        assertCommonFormat(body);
+        assertThat(body.get("code").asString()).isEqualTo("NOT_ACCEPTABLE");
+        assertThat(body.get("message").asString())
+                .isEqualTo("Formato de respuesta no disponible; use application/json");
+        assertThat(body.get("path").asString()).isEqualTo("/drivers/" + DRIVER_ID);
+    }
+
+    @Test
     void unexpectedExceptionReturns500WithoutDetailsAndLogsTrace(CapturedOutput output) throws Exception {
         when(listDriver.list(any())).thenThrow(new RuntimeException("secret detail"));
 
@@ -116,7 +153,7 @@ class GlobalExceptionHandlerWebTest {
         JsonNode body = jsonMapper.readTree(raw);
         assertCommonFormat(body);
         assertThat(body.get("code").asString()).isEqualTo("INTERNAL_ERROR");
-        assertThat(body.get("message").asString()).isEqualTo("Error interno del servidor");
+        assertThat(body.get("message").asString()).isEqualTo("Error interno del servicio");
         assertThat(body.get("path").asString()).isEqualTo("/drivers");
         assertThat(raw).doesNotContain("secret detail", "RuntimeException", "at co.edu");
         assertThat(output.getOut())

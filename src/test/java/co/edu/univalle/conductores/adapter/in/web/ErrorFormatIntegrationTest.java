@@ -146,7 +146,45 @@ class ErrorFormatIntegrationTest extends BaseIntegrationTest {
         ResponseEntity<String> response = get("/does_not_exist");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        assertErrorFormat(response, "ROUTE_NOT_FOUND", "Ruta no encontrada", "/does_not_exist", false);
+        assertErrorFormat(response, "ROUTE_NOT_FOUND", "La ruta solicitada no existe", "/does_not_exist", false);
+    }
+
+    @Test
+    void unsupportedContentTypeReturns415UnsupportedMediaType() throws Exception {
+        ResponseEntity<String> response = client().post().uri("/drivers")
+                .contentType(MediaType.TEXT_PLAIN)
+                .body("full_name=Carlos")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
+        assertErrorFormat(response, "UNSUPPORTED_MEDIA_TYPE", "Tipo de contenido no soportado; use application/json",
+                "/drivers", false);
+    }
+
+    @Test
+    void unacceptableAcceptHeaderReturns406NotAcceptable() throws Exception {
+        ResponseEntity<String> response = client().get().uri("/drivers")
+                .accept(MediaType.parseMediaType("text/csv"))
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_ACCEPTABLE);
+        assertErrorFormat(response, "NOT_ACCEPTABLE", "Formato de respuesta no disponible; use application/json",
+                "/drivers", false);
+    }
+
+    /** The API is JSON only: the XML converter that firebase-admin brings along must not answer. */
+    @Test
+    void xmlAcceptHeaderReturns406InsteadOfAnXmlBody() throws Exception {
+        ResponseEntity<String> response = client().get().uri("/drivers")
+                .accept(MediaType.APPLICATION_XML)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_ACCEPTABLE);
+        assertErrorFormat(response, "NOT_ACCEPTABLE", "Formato de respuesta no disponible; use application/json",
+                "/drivers", false);
     }
 
     @Test

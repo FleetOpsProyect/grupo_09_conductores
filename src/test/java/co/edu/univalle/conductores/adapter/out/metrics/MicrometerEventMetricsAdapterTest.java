@@ -18,15 +18,15 @@ class MicrometerEventMetricsAdapterTest {
         metrics.recordPublicationFailure(EVENT_TYPE);
         metrics.setPendingEvents(4);
 
-        assertThat(registry.get("fleetops_driver_events_published")
+        assertThat(registry.get("drivers_events_published")
                 .tag("event_type", EVENT_TYPE)
                 .counter()
                 .count()).isEqualTo(1.0);
-        assertThat(registry.get("fleetops_driver_event_publish_failures")
+        assertThat(registry.get("drivers_events_publish_failures")
                 .tag("event_type", EVENT_TYPE)
                 .counter()
                 .count()).isEqualTo(1.0);
-        assertThat(registry.get("fleetops_outbox_pending_events").gauge().value()).isEqualTo(4.0);
+        assertThat(registry.get("drivers_outbox_pending").gauge().value()).isEqualTo(4.0);
     }
 
     @Test

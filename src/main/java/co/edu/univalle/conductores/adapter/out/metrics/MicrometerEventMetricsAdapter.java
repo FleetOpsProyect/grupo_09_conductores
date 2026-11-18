@@ -11,12 +11,18 @@ import org.springframework.stereotype.Component;
 /**
  * Adapter Micrometer para las métricas de publicación, pendientes del outbox y
  * consumo de eventos.
+ *
+ * <p>Todas usan el prefijo {@code drivers_} (DEV_07). En Prometheus los contadores salen con el sufijo
+ * {@code _total}: {@code drivers_events_published_total}, {@code drivers_events_publish_failures_total},
+ * {@code drivers_events_consumed_total} y {@code drivers_events_dlq_total}; el gauge sale como
+ * {@code drivers_outbox_pending}.
  */
 @Component
 public class MicrometerEventMetricsAdapter implements EventMetricsPort, ConsumerMetricsPort {
 
-    private static final String PUBLISHED_METRIC = "fleetops_driver_events_published";
-    private static final String FAILURE_METRIC = "fleetops_driver_event_publish_failures";
+    private static final String PUBLISHED_METRIC = "drivers_events_published";
+    private static final String FAILURE_METRIC = "drivers_events_publish_failures";
+    private static final String PENDING_METRIC = "drivers_outbox_pending";
     private static final String CONSUMED_METRIC = "drivers_events_consumed";
     private static final String DLQ_METRIC = "drivers_events_dlq";
 
@@ -30,7 +36,7 @@ public class MicrometerEventMetricsAdapter implements EventMetricsPort, Consumer
      */
     public MicrometerEventMetricsAdapter(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
-        Gauge.builder("fleetops_outbox_pending_events", pendingEvents, AtomicLong::doubleValue)
+        Gauge.builder(PENDING_METRIC, pendingEvents, AtomicLong::doubleValue)
                 .description("Número de eventos pendientes de publicación en Firestore")
                 .register(meterRegistry);
     }
