@@ -39,6 +39,40 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void httpRequestHistogramsAreExposedWithPrometheusNamesAndTags() {
+        RestClient client = RestClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .build();
+
+        ResponseEntity<String> driversResponse = client.get()
+                .uri("/drivers")
+                .retrieve()
+                .toEntity(String.class);
+        assertThat(driversResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<String> metricsResponse = client.get()
+                .uri("/metrics")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(metricsResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String metrics = metricsResponse.getBody();
+        assertThat(metrics.lines()
+                .filter(line -> line.startsWith("http_server_requests_seconds_count{")
+                        && line.contains("uri=\"/drivers\""))
+                .toList())
+                .singleElement()
+                .satisfies(line -> assertThat(line).contains("method=\"GET\"", "status=\"200\""));
+        assertThat(metrics.lines()
+                .filter(line -> line.startsWith("http_server_requests_seconds_bucket{")
+                        && line.contains("uri=\"/drivers\"")
+                        && line.contains("le=\"2.0\""))
+                .toList())
+                .singleElement()
+                .satisfies(line -> assertThat(line).contains("method=\"GET\"", "status=\"200\""));
+    }
+
+    @Test
     void eventPublicationMetricsAreExposedInPrometheusFormat() {
         eventMetrics.recordPublished("driver_activated_event");
         eventMetrics.recordPublicationFailure("driver_activated_event");

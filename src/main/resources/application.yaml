@@ -37,6 +37,12 @@ springdoc:
     try-it-out-enabled: true
 
 management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 2s
   endpoints:
     web:
       base-path: /
