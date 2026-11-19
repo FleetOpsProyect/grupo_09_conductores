@@ -335,144 +335,117 @@ Requisitos de la EC2 (paso 11, fuera de este repositorio):
   `FIREBASE_CREDENTIALS_PATH`; se monta como volumen de solo lectura en
   `/secrets/firebase-adminsdk.json`.
 
-### node_exporter (DEV08-2)
+## Observabilidad (DEV_08)
 
-`docker-compose.prod.yml` incluye `node-exporter` v1.12.1 para recoger las métricas de CPU y memoria
-del host Linux EC2. La instancia desplegada es una `t3.small` (2 GiB RAM); antes de actualizar los
-servicios, revisa el margen real de recursos y los contenedores actuales:
+Sigue el dojo del curso "Monitoreo de EC2 con Prometheus y Grafana": en la EC2 solo corren
+exporters, y Prometheus y Grafana corren en la máquina de quien monitorea y leen esos exporters por
+HTTP (modelo pull). Así no se instala en producción más de lo necesario.
+
+| Componente | Dónde | Puerto | Qué mide |
+| :--- | :--- | :--- | :--- |
+| Métricas del servicio (Actuator) | EC2, contenedor `backend` | `18001` | HTTP por endpoint (con histograma para el p95), eventos consumidos y publicados, outbox, JVM |
+| node_exporter v1.12.1 | EC2, `docker-compose.prod.yml` | `19100` | CPU, memoria, disco y red del sistema operativo |
+| cAdvisor v0.55.1 | EC2, `docker-compose.prod.yml` | `18080` | CPU, memoria, red y disco de cada contenedor |
+| Prometheus v3.16.0 | Máquina local, `observability/docker-compose.yml` | `19090` | Lee los tres puertos de la EC2 cada 15 s |
+| Grafana 13.3.1 | Máquina local, `observability/docker-compose.yml` | `13000` | Dashboards |
+
+Los puertos no estándar siguen la recomendación del dojo (OWASP). Las métricas del servicio están en
+el puerto de gestión `18001`, no en el `8085` de la API (Caso B del dojo): el `8085` puede ser público
+sin exponer las métricas.
+
+### Security group
+
+Los puertos de métricas nunca se abren a `0.0.0.0/0`. En el security group de la EC2, añade una regla
+por puerto con origen **"Mi IP"** de quien vaya a monitorear:
+
+| Puerto | Uso | Origen |
+| :--- | :--- | :--- |
+| `19100` | node_exporter | Mi IP |
+| `18080` | cAdvisor | Mi IP |
+| `18001` | Métricas y salud del servicio | Mi IP |
+
+Si tu IP cambia (pasa a menudo en conexiones domésticas), actualiza las reglas. Comprueba el acceso
+desde tu máquina:
 
 ```bash
-docker compose version
-free -h
-df -h /
-docker stats --no-stream
+curl -s http://<EC2_IP>:19100/metrics | head -5
+curl -s http://<EC2_IP>:18080/metrics | head -5
+curl -s http://<EC2_IP>:18001/metrics | head -5
 ```
 
-La configuración monta `/proc` y `/sys` del host en solo lectura y solo activa los colectores `cpu` y
-`meminfo`. El contenedor no usa `privileged`, no comparte la red ni el PID del host, no publica el
-puerto 9100 y permanece en la red Docker de Compose para que Prometheus pueda consultarlo en el
-siguiente paso. Para iniciar únicamente este servicio durante la instalación controlada:
+Un timeout significa que falta la regla o que el contenedor no está corriendo (`docker ps` en la EC2).
 
-```bash
-docker compose -f docker-compose.prod.yml up -d node-exporter
-docker compose -f docker-compose.prod.yml ps node-exporter
-docker compose -f docker-compose.prod.yml logs --tail=50 node-exporter
-```
+### Exporters en la EC2
 
-Al integrar Prometheus (DEV08-3), se comprobarán las series `node_cpu_seconds_total`,
-`node_memory_MemTotal_bytes` y `node_memory_MemAvailable_bytes` en el target `node-exporter`. Las
-consultas para contrastar sus valores serán:
-
-```promql
-# CPU ocupada (%)
-100 * (1 - avg(rate(node_cpu_seconds_total{job="node-exporter", mode="idle"}[5m])))
-
-# Memoria usada (%)
-100 * (1 - node_memory_MemAvailable_bytes{job="node-exporter"}
-           / node_memory_MemTotal_bytes{job="node-exporter"})
-
-# Memoria usada (bytes)
-node_memory_MemTotal_bytes{job="node-exporter"}
-- node_memory_MemAvailable_bytes{job="node-exporter"}
-```
-
-La comprobación de scraping y de valores reales se hará al integrar Prometheus.
-
-### Prometheus y Grafana (DEV08-3/4)
-
-La configuración versionada está en `observability/`: Prometheus scrapea `backend:8085/metrics` y
-`node-exporter:9100` cada 15 segundos, con timeout de 5 segundos. Ambos puertos permanecen solo en la
-red Docker de Compose. Prometheus conserva hasta 7 días de datos y limita la TSDB persistida a
-512 MB; los datos se guardan en volúmenes nombrados, al igual que los datos de Grafana. El datasource
-y el dashboard se aprovisionan desde archivos versionados y no se editan manualmente en la UI.
-
-Antes de instalar o actualizar estos servicios en EC2, mide RAM y disco libre con los comandos
-anteriores y confirma que `SERVER_PORT=8085` en el `.env` real. El tamaño de la instancia aún no está
-verificado; no se fijan límites de memoria arbitrarios. Prometheus, Grafana y node_exporter se suman
-al consumo de `ms-conductores`, Firestore, la JVM y Docker, por lo que valida el margen antes de
-arrancarlos.
-
-Prometheus y el backend se descubren por nombre de servicio en la red bridge privada del proyecto
-Compose. No marques esa red `internal`: el backend debe conservar salida hacia AWS y Firestore.
-La red Docker no protege por sí sola `/metrics`: como el puerto 8085 del backend sigue publicado,
-este endpoint continúa siendo accesible por esa misma interfaz pública. Este cambio no altera esa
-exposición; debe acordarse e implementarse una protección compatible antes de considerar cerrado
-ese riesgo.
-
-No guardes la contraseña de Grafana en el repositorio. Compose lee el secret desde
-`~/app/secrets/grafana_admin_password`; el workflow no crea ni sobrescribe este archivo. Antes de
-habilitar el despliegue automático, migra una sola vez el valor de contraseña actual de Grafana
-(debe coincidir con la credencial válida en su base de datos persistente):
+El CD los despliega junto con el backend (ver "Despliegue continuo"). Para levantarlos a mano en la
+EC2:
 
 ```bash
 cd ~/app
-install -d -m 700 secrets
-if [ -e secrets/grafana_admin_password ]; then
-  echo "El archivo ya existe; no se sobrescribió."
-  exit 1
-fi
-umask 077
-read -r -s -p "Contraseña admin actual de Grafana: " GRAFANA_ADMIN_PASSWORD
-printf '\n'
-printf '%s' "$GRAFANA_ADMIN_PASSWORD" > secrets/grafana_admin_password
-chmod 600 secrets/grafana_admin_password
-unset GRAFANA_ADMIN_PASSWORD
-```
-
-Si esa contraseña estaba guardada como `GRAFANA_ADMIN_PASSWORD` en `.env`, elimina manualmente esa
-línea después de confirmar el archivo nuevo; no guardes una segunda copia en texto plano. El workflow
-rechaza el despliegue mientras esa variable antigua permanezca en `.env`.
-
-Verifica propiedad/permisos sin mostrar el contenido: `stat -c '%a %U %n' secrets/grafana_admin_password`
-(esperado: modo `600`, usuario operador). El workflow se detendrá antes de modificar Compose o
-contenedores si falta este archivo.
-
-Para una instalación controlada desde `~/app`, sincroniza `docker-compose.prod.yml` y todo el
-directorio `observability/` a la EC2, sin copiar `.env` desde el repositorio. Mantén el `.env` real y
-las credenciales de Firebase que ya están en la instancia. Una vez revisados recursos, secretos,
-`SERVER_PORT=8085` y archivos:
-
-```bash
-docker compose -f docker-compose.prod.yml config --quiet
-docker compose -f docker-compose.prod.yml up -d node-exporter prometheus grafana
+docker compose -f docker-compose.prod.yml up -d node-exporter cadvisor
 docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs --tail=100 node-exporter prometheus grafana
 ```
 
-La operación es aditiva: el CD actual puede seguir actualizando solo `backend` con
-`up -d --no-deps backend`; no publiques Prometheus ni node_exporter. Para Grafana, abre un túnel desde
-tu equipo (sustituye el host por el de EC2):
+node_exporter monta `/proc`, `/sys` y la raíz del host en solo lectura, sin capacidades y con
+`no-new-privileges`. cAdvisor monta en solo lectura los directorios que indica el dojo y se limita a
+contenedores Docker (`--docker_only`), revisando cada 30 s para reducir su consumo. La instancia es una
+`t3.small` (2 GiB de RAM); revisa el margen con `free -h` y `docker stats --no-stream` después de
+desplegar.
+
+### Prometheus y Grafana en tu máquina
+
+Desde la carpeta `observability/`:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 <usuario>@<host-ec2>
+cp .env.example .env     # pon en EC2_IP la Elastic IP de la EC2
+docker compose up -d
 ```
 
-Luego visita `http://localhost:3000` e inicia sesión con la contraseña configurada en EC2.
+- **Prometheus:** http://localhost:19090. En **Status → Target health**, los jobs `ms-conductores`,
+  `node-exporter` y `cadvisor` deben estar en *UP*, y la consulta `up` debe devolver `1` en cada uno.
+- **Grafana:** http://localhost:13000. La primera vez entra con `admin` / `admin` y Grafana pide
+  cambiar la contraseña. El data source de Prometheus y los dashboards se cargan solos, en la carpeta
+  **FleetOps**.
 
-Para verificar targets y series, consulta desde el contenedor Prometheus:
+Los targets de `prometheus/prometheus.yml` usan el nombre `ec2-conductores`, que el compose resuelve
+con `EC2_IP`. Así nadie tiene que editar la configuración cuando cambia la IP. Para probar todo contra
+tu propia máquina, usa `EC2_IP=host-gateway` y levanta en local el backend (`docker compose up -d` en
+la raíz) y los exporters (`docker compose -f docker-compose.prod.yml up -d node-exporter cadvisor`).
 
-```bash
-docker compose -f docker-compose.prod.yml exec prometheus \
-  promtool query instant http://localhost:9090 'up{job=~"ms-conductores|node-exporter"}'
-docker compose -f docker-compose.prod.yml exec prometheus \
-  promtool query instant http://localhost:9090 'node_memory_MemTotal_bytes{job="node-exporter"}'
-docker compose -f docker-compose.prod.yml exec prometheus \
-  promtool query instant http://localhost:9090 'node_memory_MemAvailable_bytes{job="node-exporter"}'
+Prometheus guarda hasta 7 días o 512 MB en un volumen de Docker. Solo hay datos mientras tu Prometheus
+local está encendido; el histórico queda en tu máquina. `docker compose down -v` borra esos datos.
+
+### Dashboards
+
+| Dashboard | Archivo | Contenido |
+| :--- | :--- | :--- |
+| FleetOps - ms-conductores | `grafana/dashboards/fleetops-ms-conductores.json` | Peticiones por segundo por endpoint, porcentaje de errores, CPU y memoria de la EC2, y p95 de latencia por endpoint con la meta de 2 s |
+| Node Exporter Full (ID 1860) | `grafana/dashboards/node-exporter-full-1860.json` | Dashboard de la comunidad que propone el dojo: CPU, memoria, disco, red y sistema. Revisión 46 descargada de grafana.com (licencia LGPL-3.0, autor rfmoz) |
+
+El p95 se calcula por ruta y método con el histograma de `http.server.requests`; cumplir la meta
+requiere un p95 estrictamente menor a 2 s. Sin tráfico reciente no hay una estimación válida: genera
+peticiones a `/drivers` y espera varias ventanas de scraping. Los 401/403 que responde API Gateway no
+llegan al servicio y no se cuentan.
+
+Consultas útiles en Prometheus:
+
+```promql
+# CPU ocupada de la EC2 (%)
+100 * (1 - avg(rate(node_cpu_seconds_total{job="node-exporter", mode="idle"}[5m])))
+
+# Memoria usada de la EC2 (%)
+100 * (1 - node_memory_MemAvailable_bytes{job="node-exporter"}
+           / node_memory_MemTotal_bytes{job="node-exporter"})
+
+# Espacio libre en disco
+node_filesystem_avail_bytes{job="node-exporter"}
+
+# CPU por contenedor
+rate(container_cpu_usage_seconds_total{job="cadvisor", name!=""}[5m])
+
+# Estado de todos los targets
+up
 ```
-
-Ambos targets deben reportar `1`. Compara total y memoria disponible con `free -b` en la instancia
-EC2; verifica también las métricas `node_cpu_seconds_total` frente al uso reportado por el host. Que
-el contenedor esté ejecutándose no demuestra por sí solo que esté leyendo las métricas del host.
-Genera tráfico a `/drivers` para poblar paneles HTTP y espera varias ventanas de scraping. El p95 se
-calcula por ruta y método con el histograma de `http.server.requests`; la línea de 2 s marca el
-límite: cumplir el objetivo requiere p95 estrictamente menor a 2 s. Sin tráfico reciente puede no
-haber una estimación válida. Las respuestas 401/403 generadas por API Gateway antes de llegar al
-servicio no se cuentan.
-
-Los dashboards y el datasource sobreviven a recreaciones gracias al provisioning versionado. Los
-datos TSDB y SQLite de Grafana persisten en volúmenes nombrados; evita `docker compose down -v`, que
-los elimina. La retención de 7 días/512 MB limita el crecimiento, pero debe revisarse tras observar
-uso real de disco.
 
 ## Publicación en Docker Hub
 
@@ -511,20 +484,19 @@ El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o 
 2. **SonarCloud:** `./gradlew sonar`; si el Quality Gate falla, se detiene la publicación.
 3. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
    y `latest`.
-4. **Sincronización y prevalidación:** por SSH/SCP, se copian `docker-compose.prod.yml` y
-   `observability/` a un directorio temporal único bajo `~/app`. El workflow comprueba que existen
-   `.env`, `SERVER_PORT=8085` y el secret persistente de Grafana con permisos `600`; también rechaza
-   una contraseña Grafana duplicada en texto plano dentro de `.env`. Enlaza `.env` y `secrets/` solo
-   para validar la configuración temporal con `docker compose config --quiet`, y luego promueve los
-   archivos versionados sin borrar directorios ni archivos de producción.
-5. **Backend:** se conserva el despliegue de la imagen etiquetada con `github.sha`, el chequeo de
-   `/health` y el rollback al tag anterior si falla la actualización. Si la descarga de la imagen
-   falla, el contenedor backend no se recrea.
-6. **Observabilidad:** `node-exporter`, `prometheus` y `grafana` se actualizan por separado con
-   `up -d --no-deps`; esto no recrea el backend. Luego se consultan los targets de Prometheus y las
-   métricas de CPU/memoria de node_exporter. Un fallo marca el workflow como fallido, pero no revierte
-   un backend que ya quedó saludable. El flujo no termina anticipadamente al validar salud; se
-   ejecutan ambas ramas de verificación.
+4. **Sincronización y prevalidación:** por SSH/SCP, copia `docker-compose.prod.yml` a un directorio
+   temporal bajo `~/app`. Comprueba que existe `.env`, que `SERVER_PORT=8085` y que `MANAGEMENT_PORT`
+   es `18001` o no está definido. Valida la configuración temporal con `docker compose config --quiet`
+   y solo entonces reemplaza `docker-compose.prod.yml` en producción.
+5. **Backend:** despliega la imagen etiquetada con `github.sha`, comprueba `/health` en el puerto de
+   gestión (`18001`) y vuelve al tag anterior si falla. Si la descarga de la imagen falla, el backend
+   no se recrea.
+6. **Exporters:** actualiza `node-exporter` y `cadvisor` sin recrear el backend. Con
+   `--remove-orphans` elimina los contenedores de servicios que ya no están en el compose (por
+   ejemplo, el Prometheus y el Grafana de la configuración anterior, que ahora corren en local).
+   Después comprueba que el `19100` publica CPU y disco, que el `18080` publica CPU por contenedor y
+   que el `18001` publica métricas HTTP. Un fallo marca el workflow como fallido, pero no revierte un
+   backend que ya quedó saludable.
 
 Secretos de GitHub necesarios:
 
@@ -532,12 +504,10 @@ Secretos de GitHub necesarios:
 - `EC2_HOST`, `EC2_USER` y `EC2_SSH_KEY` (clave privada de un par dedicado al pipeline, no una
   clave personal).
 
-Antes de habilitar este workflow, en EC2 deben existir el `.env` real, el archivo
-`secrets/grafana_admin_password` migrado manualmente, y el JSON de cuenta de servicio de Firebase
-(permisos `600`, montado como volumen de solo lectura). El workflow nunca copia `.env` ni
-credenciales/secrets locales; solo sincroniza `docker-compose.prod.yml` y `observability/`.
-No abras puertos públicos 3000, 9090 ni 9100. Como el puerto 8085 conserva su publicación actual,
-`/metrics` también sigue expuesto a través de ese puerto hasta que se implemente su protección.
+Antes de habilitar este workflow, en la EC2 deben existir el `.env` real y el JSON de la cuenta de
+servicio de Firebase (permisos `600`, montado como volumen de solo lectura). El workflow nunca copia
+`.env` ni credenciales; solo sincroniza `docker-compose.prod.yml`. Los puertos `18001`, `19100` y
+`18080` solo se abren a "Mi IP" de quien monitorea (ver "Observabilidad").
 
 Rollback manual: define `IMAGE_TAG=<SHA anterior>` en el `.env` de la EC2 y ejecuta
 `docker compose -f docker-compose.prod.yml up -d --no-deps backend`.
@@ -676,8 +646,12 @@ perfil de instancia (rol IAM).
 | :--- | :--- | :--- | :--- |
 | 22 | TCP | `0.0.0.0/0` | SSH del workflow CD y del equipo. Excepción documentada: las IPs de GitHub Actions cambian |
 | 8085 | TCP | `0.0.0.0/0` | **Limitación**: API Gateway llega sin VPC Link, así que no se puede limitar a su origen |
+| 18001 | TCP | Mi IP | Métricas y salud del servicio, para el Prometheus local (DEV_08) |
+| 19100 | TCP | Mi IP | node_exporter, para el Prometheus local (DEV_08) |
+| 18080 | TCP | Mi IP | cAdvisor, para el Prometheus local (DEV_08) |
 
-Las dos reglas están abiertas a Internet y son limitaciones conocidas. Para cerrar el 8085 hace falta un
+Las reglas de 22 y 8085 están abiertas a Internet y son limitaciones conocidas; las de métricas solo
+admiten la IP de quien monitorea. Para cerrar el 8085 hace falta un
 VPC Link entre API Gateway y la EC2; para cerrar el 22, desplegar con AWS Systems Manager en vez de SSH.
 
 ### Elastic IP
@@ -707,7 +681,7 @@ Se asignó una Elastic IP a la instancia para que la dirección no cambie al rei
 - `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda
   `created_at`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- No hay logs estructurados JSON ni dashboards de Grafana por ahora.
+- No hay logs estructurados JSON por ahora (TEC_03).
 - `PUT /drivers/{id}` no acepta `document_number`, así que no responde
   `400 NOT_EDITABLE` cuando llega con un valor distinto (HU-08, criterio 2); por eso tampoco
   aparece en la especificación OpenAPI.

@@ -1,16 +1,29 @@
+# Prometheus local (dojo "Monitoreo de EC2 con Prometheus y Grafana", paso 5).
+#
+# Corre en la máquina de quien monitorea y lee por HTTP los exporters de la EC2 (modelo pull).
+# "ec2-conductores" no es un DNS real: observability/docker-compose.yml lo resuelve con la IP
+# definida en observability/.env (EC2_IP), así nadie tiene que editar este archivo.
 global:
   scrape_interval: 15s
   scrape_timeout: 5s
   evaluation_interval: 15s
 
 scrape_configs:
+  # Métricas del servicio (Actuator) en el puerto de gestión, separado del de la API.
   - job_name: ms-conductores
     metrics_path: /metrics
     static_configs:
       - targets:
-          - backend:8085
+          - ec2-conductores:18001
 
+  # Métricas del sistema operativo de la EC2: CPU, memoria, disco y red.
   - job_name: node-exporter
     static_configs:
       - targets:
-          - node-exporter:9100
+          - ec2-conductores:19100
+
+  # Métricas de cada contenedor Docker de la EC2.
+  - job_name: cadvisor
+    static_configs:
+      - targets:
+          - ec2-conductores:18080
