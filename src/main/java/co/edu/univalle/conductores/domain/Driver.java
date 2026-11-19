@@ -13,8 +13,7 @@ public class Driver {
 
     private static final Pattern DOCUMENT_NUMBER_PATTERN = Pattern.compile("^[0-9]{6,10}$");
     private static final Pattern PHONE_PATTERN = Pattern.compile("^3[0-9]{9}$");
-    private static final Pattern EMAIL_PATTERN = Pattern.compile(
-            "^[^@\\s]+@[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\\.[a-zA-Z]{2,}$");
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
     private static final int MAX_EMAIL_LENGTH = 100;
 
     private final UUID id;
@@ -93,6 +92,52 @@ public class Driver {
         this.fullName = fullName.trim();
         this.email = email.trim();
         this.phone = phone;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Aplica el bloqueo por documentos vencidos.
+     *
+     * @param now momento en que se aplica el bloqueo
+     */
+    public void applyDocumentBlock(OffsetDateTime now) {
+        this.documentBlock = true;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Remueve el bloqueo por documentos vencidos cuando se renuevan.
+     *
+     * @param now momento en que se remueve el bloqueo
+     */
+    public void removeDocumentBlock(OffsetDateTime now) {
+        this.documentBlock = false;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Aplica el bloqueo médico por incidente grave reportado.
+     *
+     * @param now momento en que se aplica el bloqueo
+     */
+    public void applyMedicalBlock(OffsetDateTime now) {
+        this.medicalBlock = true;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Remueve el bloqueo médico cuando se registra el alta médica del conductor.
+     * Si el conductor no tiene un bloqueo médico activo, la operación no está permitida.
+     * No modifica el bloqueo por documentos vencidos.
+     *
+     * @param now momento en que se registra el alta médica
+     * @throws StatusNotAllowedException si el conductor no tiene un bloqueo médico activo
+     */
+    public void releaseMedicalBlock(OffsetDateTime now) {
+        if (!this.medicalBlock) {
+            throw new StatusNotAllowedException("El conductor no tiene un bloqueo médico activo");
+        }
+        this.medicalBlock = false;
         this.updatedAt = now;
     }
 

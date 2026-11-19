@@ -13,13 +13,14 @@ import org.springframework.context.annotation.Configuration;
 public class HealthConfig {
 
     /**
-     * Indicador de salud de Firestore.
+     * Firestore health indicator, bounded by the configured Firestore timeout.
      *
-     * @param firestore cliente de Firestore
-     * @return indicador de salud
+     * @param firestore Firestore client
+     * @param properties Firestore settings
+     * @return health indicator
      */
     @Bean
-    public HealthIndicator firestoreHealthIndicator(Firestore firestore) {
-        return new FirestoreHealthIndicator(firestore);
+    public HealthIndicator firestoreHealthIndicator(Firestore firestore, FirestoreProperties properties) {
+        return new FirestoreHealthIndicator(firestore, properties.timeout());
     }
 }

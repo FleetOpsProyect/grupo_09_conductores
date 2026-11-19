@@ -13,6 +13,6 @@ public class DuplicateDocumentException extends RuntimeException {
      * @param documentNumber número de documento que ya existe
      */
     public DuplicateDocumentException(String documentNumber) {
-        super("Ya existe un conductor con document_number " + documentNumber);
+        super("Ya existe un conductor con el documento de identidad " + documentNumber);
     }
 }

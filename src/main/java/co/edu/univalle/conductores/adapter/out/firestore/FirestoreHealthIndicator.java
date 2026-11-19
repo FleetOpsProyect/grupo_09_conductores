@@ -1,6 +1,8 @@
 package co.edu.univalle.conductores.adapter.out.firestore;
 
 import com.google.cloud.firestore.Firestore;
+import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -8,32 +10,35 @@ import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
 /**
- * Indicador de salud que comprueba la conectividad con Firestore.
+ * Health indicator that checks connectivity with Firestore.
  */
 public class FirestoreHealthIndicator implements HealthIndicator {
 
-    private static final long TIMEOUT_SECONDS = 2;
-
     private final Firestore firestore;
 
+    private final Duration timeout;
+
     /**
-     * Crea el indicador con el cliente de Firestore.
+     * Creates the indicator.
      *
-     * @param firestore cliente de Firestore
+     * @param firestore Firestore client
+     * @param timeout maximum time the check waits for Firestore
      */
-    public FirestoreHealthIndicator(Firestore firestore) {
+    public FirestoreHealthIndicator(Firestore firestore, Duration timeout) {
         this.firestore = firestore;
+        this.timeout = Objects.requireNonNull(timeout, "timeout");
     }
 
     /**
-     * Comprueba Firestore con una lectura acotada y sin escrituras.
+     * Checks Firestore with a bounded read and no writes.
      *
-     * @return estado UP si Firestore responde, DOWN en caso contrario
+     * @return UP if Firestore answers within the timeout, DOWN otherwise
      */
     @Override
     public Health health() {
         try {
-            firestore.collection(DriverDocument.COLLECTION).limit(1).get().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            firestore.collection(DriverDocument.COLLECTION).limit(1).get()
+                    .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             return Health.up().build();
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();

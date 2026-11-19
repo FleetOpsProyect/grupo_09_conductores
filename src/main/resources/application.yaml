@@ -17,6 +17,17 @@ app:
   firebase:
     project-id: ${FIREBASE_PROJECT_ID}
     emulator-host: ${FIREBASE_EMULATOR_HOST:}
+  firestore:
+    timeout: ${FIRESTORE_TIMEOUT:2s}
+  messaging:
+    driver-events-topic-arn: "${FLEETOPS_DRIVER_TOPIC_ARN:arn:aws:sns:us-east-1:000000000000:fleetops_driver_events}"
+    driver-queue: "${FLEETOPS_DRIVER_QUEUE_URL:fleetops_driver_queue}"
+    driver-dlq-url: "${FLEETOPS_DRIVER_DLQ_URL:fleetops_driver_dlq}"
+    consumer-enabled: ${FLEETOPS_CONSUMER_ENABLED:true}
+  outbox:
+    publish-interval-ms: ${OUTBOX_PUBLISH_INTERVAL_MS:2000}
+    batch-size: ${OUTBOX_BATCH_SIZE:50}
+    publisher-enabled: ${OUTBOX_PUBLISHER_ENABLED:true}
 
 springdoc:
   api-docs:
@@ -26,6 +37,16 @@ springdoc:
     try-it-out-enabled: true
 
 management:
+  # Actuator (/health, /metrics, /info) en un puerto propio, separado del de la API (dojo de monitoreo,
+  # Caso B): el puerto de la API puede quedar público sin exponer las métricas.
+  server:
+    port: ${MANAGEMENT_PORT:18001}
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 2s
   endpoints:
     web:
       base-path: /

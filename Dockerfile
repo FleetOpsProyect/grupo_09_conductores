@@ -19,12 +19,13 @@ COPY --from=build --chown=app:app /workspace/build/libs/*.jar app.jar
 
 USER app
 
-EXPOSE 8085
+EXPOSE 8085 18001
 
 ENV SERVER_PORT=8085
+ENV MANAGEMENT_PORT=18001
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -q -O - "http://127.0.0.1:${SERVER_PORT}/health" > /dev/null || exit 1
+  CMD wget -q -O - "http://127.0.0.1:${MANAGEMENT_PORT}/health" > /dev/null || exit 1
 
 ENTRYPOINT ["java", "-jar", "app.jar"]

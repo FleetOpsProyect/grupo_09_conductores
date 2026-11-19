@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,5 +43,16 @@ class GetDriverServiceTest {
 
         assertThatThrownBy(() -> new GetDriverService(repository).get(id))
                 .isInstanceOf(DriverNotFoundException.class);
+    }
+
+    @Test
+    void getPropagatesPersistenceUnavailableInsteadOfNotFound() {
+        UUID id = UUID.randomUUID();
+        PersistenceUnavailableException unavailable = new PersistenceUnavailableException("down", null);
+        when(repository.findById(id)).thenThrow(unavailable);
+
+        assertThatThrownBy(() -> new GetDriverService(repository).get(id))
+                .isSameAs(unavailable)
+                .isNotInstanceOf(DriverNotFoundException.class);
     }
 }

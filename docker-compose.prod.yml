@@ -7,6 +7,13 @@
 #   se monta ningún archivo de credenciales de AWS.
 # - El JSON de la cuenta de servicio de Firebase se monta como volumen de solo lectura
 #   y la variable GOOGLE_APPLICATION_CREDENTIALS apunta a la ruta DENTRO del contenedor.
+#
+# Observabilidad (DEV_08, dojo "Monitoreo de EC2 con Prometheus y Grafana"):
+# - En la EC2 solo corren exporters. Prometheus y Grafana corren en la máquina local
+#   (observability/docker-compose.yml) y leen estos puertos por HTTP (modelo pull).
+# - Puertos no estándar: 18001 (métricas y salud del servicio), 19100 (node_exporter) y
+#   18080 (cAdvisor). El security group solo los admite desde la IP de quien monitorea
+#   ("Mi IP"), nunca desde 0.0.0.0/0.
 
 services:
   backend:
@@ -16,14 +23,63 @@ services:
       - .env
     ports:
       - "${SERVER_PORT:-8085}:8085"
+      # Puerto de gestión (Actuator): /health, /metrics e /info, separado del de la API.
+      - "18001:18001"
     volumes:
       - "${FIREBASE_CREDENTIALS_PATH:-./credentials/firebase-adminsdk.json}:/secrets/firebase-adminsdk.json:ro"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:18001/health > /dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Métricas del sistema operativo de la EC2: CPU, memoria, disco y red (dojo, paso 1).
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.12.1
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+    ports:
+      - "19100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Métricas de cada contenedor Docker: CPU, memoria, red y disco (dojo, paso 2).
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    restart: unless-stopped
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+    ports:
+      - "18080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:

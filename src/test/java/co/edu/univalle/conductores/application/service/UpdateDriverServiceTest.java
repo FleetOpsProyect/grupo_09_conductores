@@ -11,6 +11,7 @@ import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -53,6 +54,18 @@ class UpdateDriverServiceTest {
         assertThatThrownBy(() -> new UpdateDriverService(repository, CLOCK)
                 .update(id, new UpdateDriver.Command("Carlos Pérez", "carlos@correo.com", null)))
                 .isInstanceOf(DriverNotFoundException.class);
+        verify(repository, never()).save(any(Driver.class));
+    }
+
+    @Test
+    void updatePropagatesPersistenceUnavailableInsteadOfNotFoundAndSavesNothing() {
+        UUID id = UUID.randomUUID();
+        PersistenceUnavailableException unavailable = new PersistenceUnavailableException("down", null);
+        when(repository.findById(id)).thenThrow(unavailable);
+
+        assertThatThrownBy(() -> new UpdateDriverService(repository, CLOCK)
+                .update(id, new UpdateDriver.Command("Carlos Pérez", "carlos@correo.com", null)))
+                .isSameAs(unavailable);
         verify(repository, never()).save(any(Driver.class));
     }
 }

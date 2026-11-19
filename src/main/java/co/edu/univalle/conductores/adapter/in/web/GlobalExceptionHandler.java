@@ -5,24 +5,50 @@ import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.InvalidDriverException;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
+import co.edu.univalle.conductores.domain.StatusNotAllowedException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+import tools.jackson.databind.exc.MismatchedInputException;
 
 /**
  * Manejador global de errores: convierte las excepciones en el formato de error común.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    private static final String INVALID_DATA = "INVALID_DATA";
+
+    private final JsonFieldNameResolver fieldNames;
+
+    /**
+     * Creates the handler.
+     *
+     * @param fieldNames resolves the JSON name of invalid fields
+     */
+    public GlobalExceptionHandler(JsonFieldNameResolver fieldNames) {
+        this.fieldNames = fieldNames;
+    }
 
     /**
      * Conductor inexistente (404).
@@ -49,6 +75,19 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Estado no permitido para la operación (409).
+     *
+     * @param ex excepción lanzada
+     * @param request petición actual
+     * @return error común
+     */
+    @ExceptionHandler(StatusNotAllowedException.class)
+    public ResponseEntity<ErrorResponse> handleStatusNotAllowed(
+            StatusNotAllowedException ex, HttpServletRequest request) {
+        return build(HttpStatus.CONFLICT, "STATUS_NOT_ALLOWED", ex.getMessage(), request, List.of());
+    }
+
+    /**
      * Datos que no cumplen las reglas del dominio (400).
      *
      * @param ex excepción lanzada
@@ -61,28 +100,30 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Errores de validación del cuerpo, con todos los campos inválidos (400).
+     * Invalid request body: 400 INVALID_DATA with one entry per invalid field.
      *
-     * @param ex excepción lanzada
-     * @param request petición actual
-     * @return error común con el detalle por campo
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-field detail
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex,
             HttpServletRequest request) {
+        Object target = ex.getBindingResult().getTarget();
         List<FieldError> errors = ex.getBindingResult().getFieldErrors().stream()
-                .map(error -> new FieldError(error.getField(), error.getDefaultMessage()))
+                .map(error -> new FieldError(fieldNames.resolve(target, error.getField()),
+                        ValidationErrorCodes.fromConstraint(error.getCode())))
                 .toList();
-        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Hay datos inválidos en la solicitud",
-                request, errors);
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Los datos del conductor no son válidos",
+                request, ValidationErrorCodes.onePerField(errors));
     }
 
     /**
-     * Errores de validación de parámetros de consulta, como page o size (400).
+     * Invalid request parameters such as page or size: 400 INVALID_DATA with one entry per parameter.
      *
-     * @param ex excepción lanzada
-     * @param request petición actual
-     * @return error común con el detalle por parámetro
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-parameter detail
      */
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ResponseEntity<ErrorResponse> handleInvalidParams(HandlerMethodValidationException ex,
@@ -90,21 +131,162 @@ public class GlobalExceptionHandler {
         List<FieldError> errors = ex.getParameterValidationResults().stream()
                 .flatMap(result -> result.getResolvableErrors().stream()
                         .map(error -> new FieldError(result.getMethodParameter().getParameterName(),
-                                error.getDefaultMessage())))
+                                ValidationErrorCodes.fromMessageCodes(error.getCodes()))))
                 .toList();
-        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Hay parámetros inválidos", request, errors);
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay parámetros inválidos", request,
+                ValidationErrorCodes.onePerField(errors));
     }
 
     /**
-     * Valores con formato incorrecto, como un id que no es UUID o un estado desconocido (400).
+     * Parameter that cannot be converted to its type, such as page=abc or an unknown status: 400 INVALID_DATA.
      *
-     * @param ex excepción lanzada
-     * @param request petición actual
-     * @return error común
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the invalid parameter
      */
-    @ExceptionHandler({MethodArgumentTypeMismatchException.class, HttpMessageNotReadableException.class})
-    public ResponseEntity<ErrorResponse> handleMalformed(Exception ex, HttpServletRequest request) {
-        return build(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Formato de datos inválido", request, List.of());
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex,
+            HttpServletRequest request) {
+        FieldError error = new FieldError(ex.getName(), ValidationErrorCodes.fromTargetType(ex.getRequiredType()));
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay parámetros inválidos", request, List.of(error));
+    }
+
+    /**
+     * Unreadable body. A value with the wrong type for a field is 400 INVALID_DATA for that field;
+     * a body that is not valid JSON is 400 INVALID_JSON.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex,
+            HttpServletRequest request) {
+        if (ex.getCause() instanceof MismatchedInputException mismatch && !mismatch.getPath().isEmpty()) {
+            FieldError error = new FieldError(fieldNames.fromJacksonPath(mismatch.getPath()),
+                    ValidationErrorCodes.fromTargetType(mismatch.getTargetType()));
+            return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Los datos del conductor no son válidos",
+                    request, List.of(error));
+        }
+        return build(HttpStatus.BAD_REQUEST, "INVALID_JSON", "El cuerpo de la solicitud no es un JSON válido",
+                request, List.of());
+    }
+
+    /**
+     * Route that does not exist: 404 ROUTE_NOT_FOUND.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleRouteNotFound(NoResourceFoundException ex,
+            HttpServletRequest request) {
+        return build(HttpStatus.NOT_FOUND, "ROUTE_NOT_FOUND", "La ruta solicitada no existe", request, List.of());
+    }
+
+    /**
+     * HTTP method not supported by the route, such as DELETE /drivers: 405 METHOD_NOT_ALLOWED.
+     * The Allow header lists the supported methods.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the Allow header
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotAllowed(HttpRequestMethodNotSupportedException ex,
+            HttpServletRequest request) {
+        ResponseEntity<ErrorResponse> response = build(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
+                "Método no permitido para esta ruta", request, List.of());
+        HttpHeaders headers = new HttpHeaders();
+        if (ex.getSupportedHttpMethods() != null) {
+            headers.setAllow(ex.getSupportedHttpMethods());
+        }
+        return ResponseEntity.status(response.getStatusCode()).headers(headers).body(response.getBody());
+    }
+
+    /**
+     * Request body with a Content-Type the route does not accept: 415 UNSUPPORTED_MEDIA_TYPE.
+     * The Accept header lists the supported media types.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the Accept header
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex,
+            HttpServletRequest request) {
+        return fromSpring(ex, "UNSUPPORTED_MEDIA_TYPE",
+                "Tipo de contenido no soportado; use application/json", request);
+    }
+
+    /**
+     * Accept header the route cannot satisfy: 406 NOT_ACCEPTABLE. The body is always JSON, even though
+     * the client did not ask for it, so it still follows the common format.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error in JSON
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleNotAcceptable(HttpMediaTypeNotAcceptableException ex,
+            HttpServletRequest request) {
+        return fromSpring(ex, "NOT_ACCEPTABLE",
+                "Formato de respuesta no disponible; use application/json", request);
+    }
+
+    /**
+     * Persistence store down or too slow: 503 SERVICE_UNAVAILABLE with a fixed message.
+     *
+     * <p>This is the only place where the failure is logged at ERROR: every endpoint goes through it
+     * and it has the request context. The adapter only translates and the services do not catch.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error without exception details
+     */
+    @ExceptionHandler(PersistenceUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handlePersistenceUnavailable(PersistenceUnavailableException ex,
+            HttpServletRequest request) {
+        log.error("Persistence unavailable on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE",
+                "Servicio temporalmente no disponible, intente nuevamente", request, List.of());
+    }
+
+    /**
+     * Any unexpected exception: 500 INTERNAL_ERROR. The stack trace is logged at ERROR and never
+     * returned to the client.
+     *
+     * <p>Any other Spring MVC exception (it implements {@link org.springframework.web.ErrorResponse},
+     * for example a missing request header) keeps its own status and headers, with code
+     * REQUEST_NOT_PROCESSABLE, so no error leaves the service in Spring's default format.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error without exception details
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex, HttpServletRequest request) {
+        if (ex instanceof org.springframework.web.ErrorResponse springError) {
+            return fromSpring(springError, "REQUEST_NOT_PROCESSABLE", "La solicitud no se pudo procesar", request);
+        }
+        log.error("Unexpected error on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Error interno del servicio",
+                request, List.of());
+    }
+
+    /**
+     * Builds the common error for a Spring MVC exception, keeping its status and headers (Allow, Accept)
+     * and forcing a JSON body so content negotiation cannot drop it.
+     */
+    private ResponseEntity<ErrorResponse> fromSpring(org.springframework.web.ErrorResponse ex, String code,
+            String message, HttpServletRequest request) {
+        ErrorResponse body = new ErrorResponse(code, message,
+                OffsetDateTime.now(ZoneId.of("America/Bogota")), request.getRequestURI(), List.of());
+        return ResponseEntity.status(ex.getStatusCode())
+                .headers(ex.getHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
     }
 
     private ResponseEntity<ErrorResponse> build(HttpStatus status, String code, String message,

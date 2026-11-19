@@ -17,11 +17,11 @@ public record ErrorResponse(String code, String message, OffsetDateTime timestam
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<FieldError> errors) {
 
     /**
-     * Error de un campo específico.
+     * Error of a single field or parameter.
      *
-     * @param field nombre del campo
-     * @param message qué corregir
+     * @param field JSON name of the field or parameter
+     * @param code validation code, for example REQUIRED or INVALID_FORMAT
      */
-    public record FieldError(String field, String message) {
+    public record FieldError(String field, String code) {
     }
 }

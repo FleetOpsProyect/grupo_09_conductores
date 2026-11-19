@@ -54,6 +54,7 @@ application-test.yaml
 *firebase-adminsdk*.json
 serviceAccount*.json
 credentials/
+secrets/
 
 # Logs
 logs/
