@@ -509,8 +509,9 @@ El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o 
    `--remove-orphans` elimina los contenedores de servicios que ya no están en el compose (por
    ejemplo, el Prometheus y el Grafana de la configuración anterior, que ahora corren en local).
    Después comprueba que el `19100` publica CPU y disco, que el `18080` publica CPU por contenedor y
-   que el `18001` publica métricas HTTP. Un fallo marca el workflow como fallido, pero no revierte un
-   backend que ya quedó saludable.
+   que el `18001` publica métricas del servicio (`process_uptime_seconds`; las métricas HTTP solo
+   aparecen después de la primera petición a la API). Un fallo marca el workflow como fallido, pero
+   no revierte un backend que ya quedó saludable.
 
 Secretos de GitHub necesarios:
 
