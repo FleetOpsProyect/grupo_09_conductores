@@ -32,7 +32,8 @@ Toda la configuración llega por variables de entorno (DEV_04). La columna **Loc
 
 | Variable | Descripción | Local | Producción | Estado |
 | :--- | :--- | :--- | :--- | :--- |
-| `SERVER_PORT` | Puerto HTTP del servicio. | `8085` | `8085` | Implementada |
+| `SERVER_PORT` | Puerto HTTP de la API. | `8085` | `8085` | Implementada |
+| `MANAGEMENT_PORT` | Puerto de `/health`, `/metrics` e `/info` (Actuator), separado del de la API para no exponer las métricas por el puerto público. | `18001` | `18001` | Implementada |
 | `FIREBASE_PROJECT_ID` | Proyecto de Firebase/Firestore. | `demo-conductores` | id del proyecto real de Firebase | Implementada |
 | `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. | `localhost:8180` (Compose usa `firestore-emulator:8080`) | vacío | Implementada |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Ruta, dentro del contenedor, al JSON de la cuenta de servicio de Firebase. | sin definir (emulador) | `/secrets/firebase-adminsdk.json` | Implementada |
@@ -115,9 +116,9 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 | `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `POST` | `/drivers/{id}/medical-release` | Registra el alta médica de un conductor (HU-10). Responde `200`, `400`, `404`, `409` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
-| `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
-| `GET` | `/metrics` | Métricas en formato Prometheus. |
-| `GET` | `/info` | Información del servicio. |
+| `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. Puerto de gestión (`18001`). |
+| `GET` | `/metrics` | Métricas en formato Prometheus. Puerto de gestión (`18001`). |
+| `GET` | `/info` | Información del servicio. Puerto de gestión (`18001`). |
 | `GET` | `/v3/api-docs` | Especificación OpenAPI en JSON, con propiedades en snake_case. |
 | `GET` | `/swagger-ui.html` | Interfaz Swagger UI. |
 
@@ -176,8 +177,11 @@ curl -X POST http://localhost:8085/drivers \
   }'
 ```
 
-Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/info`, no
-`/actuator/*`.
+Los endpoints de gestión usan la raíz del servicio (`/health`, `/metrics` e `/info`, no `/actuator/*`)
+y un puerto propio, `MANAGEMENT_PORT` (`18001`), separado del de la API (`8085`). Así el puerto de la API
+puede ser público sin exponer las métricas, como pide el dojo de monitoreo (Caso B). Por ejemplo:
+`curl http://localhost:18001/health` y `curl http://localhost:18001/metrics`. En el puerto `8085`,
+esas rutas responden `404`.
 
 En `/metrics`, las métricas de eventos son:
 

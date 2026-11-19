@@ -7,6 +7,7 @@ import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.EventMetricsPort;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,10 +24,28 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
     @LocalServerPort
     private int port;
 
+    @LocalManagementPort
+    private int managementPort;
+
+    @Test
+    void metricsAreNotServedOnTheApiPort() {
+        ResponseEntity<String> response = RestClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .defaultStatusHandler(status -> true, (request, clientResponse) -> { })
+                .build()
+                .get()
+                .uri("/metrics")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).doesNotContain("jvm_memory_used_bytes");
+    }
+
     @Test
     void metricsAreExposedAtMetricsPath() {
         ResponseEntity<String> response = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
+                .baseUrl("http://localhost:" + managementPort)
                 .build()
                 .get()
                 .uri("/metrics")
@@ -40,17 +59,19 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
 
     @Test
     void httpRequestHistogramsAreExposedWithPrometheusNamesAndTags() {
-        RestClient client = RestClient.builder()
+        ResponseEntity<String> driversResponse = RestClient.builder()
                 .baseUrl("http://localhost:" + port)
-                .build();
-
-        ResponseEntity<String> driversResponse = client.get()
+                .build()
+                .get()
                 .uri("/drivers")
                 .retrieve()
                 .toEntity(String.class);
         assertThat(driversResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        ResponseEntity<String> metricsResponse = client.get()
+        ResponseEntity<String> metricsResponse = RestClient.builder()
+                .baseUrl("http://localhost:" + managementPort)
+                .build()
+                .get()
                 .uri("/metrics")
                 .retrieve()
                 .toEntity(String.class);
@@ -79,7 +100,7 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
         eventMetrics.setPendingEvents(3);
 
         ResponseEntity<String> response = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
+                .baseUrl("http://localhost:" + managementPort)
                 .build()
                 .get()
                 .uri("/metrics")
@@ -103,7 +124,7 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
         consumerMetrics.recordDlq("document_expired_event", "max_retries");
 
         ResponseEntity<String> response = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
+                .baseUrl("http://localhost:" + managementPort)
                 .build()
                 .get()
                 .uri("/metrics")
