@@ -179,22 +179,35 @@ curl -X POST http://localhost:8085/drivers \
 
 Los endpoints de gestión usan la raíz del servicio (`/health`, `/metrics` e `/info`, no `/actuator/*`)
 y un puerto propio, `MANAGEMENT_PORT` (`18001`), separado del de la API (`8085`). Así el puerto de la API
-puede ser público sin exponer las métricas, como pide el dojo de monitoreo (Caso B). Por ejemplo:
+puede ser público sin exponer las métricas. Por ejemplo:
 `curl http://localhost:18001/health` y `curl http://localhost:18001/metrics`. En el puerto `8085`,
 esas rutas responden `404`.
 
 En `/metrics`, las métricas de eventos son:
 
-**Publicación (outbox, DEV_07-2):**
+**Publicación:**
 - `drivers_events_published_total{event_type}`: eventos publicados y marcados `SENT`.
 - `drivers_events_publish_failures_total{event_type}`: intentos fallidos de publicación en SNS.
 - `drivers_outbox_pending`: eventos que siguen pendientes en Firestore.
 
-**Consumo SQS (DEV_07-3):**
+**Consumo SQS:**
 - `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed` o `duplicate`.
 - `drivers_events_dlq_total{event_type, reason}`: eventos enviados o derivados a la DLQ con `reason = invalid_message`, `driver_not_found` o `max_retries`.
 
-### Consumidor SQS (TEC_06)
+### Publicador del outbox
+
+El registro de un conductor (y el alta médica) guarda el evento en `outbox_events` en la misma
+transacción de Firestore, con estado `PENDING`, y responde sin esperar a SNS. Un proceso programado,
+cada `OUTBOX_PUBLISH_INTERVAL_MS` (2 s), lee hasta `OUTBOX_BATCH_SIZE` eventos `PENDING` en orden de
+`created_at`, los publica en `fleetops_driver_events` con el message attribute `event_type` y los marca
+`SENT` cuando SNS confirma.
+
+Si SNS no responde, el evento sigue `PENDING`, suma `attempts` y se intenta de nuevo en la siguiente
+pasada. `OutboxSnsOutageIntegrationTest` lo prueba de punta a punta con un SNS simulado caído:
+`POST /drivers` responde `201`, el evento queda `PENDING` con `attempts > 0` y, cuando SNS vuelve, se
+publica y queda `SENT`.
+
+### Consumidor SQS
 
 El consumidor escucha en la cola `fleetops_driver_queue` (conectada por suscripciones SNS a eventos
 de documentación e incidentes). Procesa:
@@ -253,7 +266,7 @@ El emulador no aplica TTL.
 
 **Limitación actual:** el proyecto de Firebase está en el plan Spark, que no ejecuta borrados por TTL,
 así que la política no está activa y la colección crece sin límite. Cada documento ocupa unos 200 bytes,
-así que el impacto es bajo. Para activarla, pasar el proyecto al plan Blaze y crear la política.
+así que el impacto es bajo.
 
 ### Firestore no disponible
 
@@ -326,7 +339,7 @@ cp .env.prod.example .env
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-Requisitos de la EC2 (paso 11, fuera de este repositorio):
+Requisitos de la EC2:
 
 - Un rol IAM que permita publicar en `fleetops_driver_events` y consumir
   `fleetops_driver_queue` y `fleetops_driver_dlq`. No se montan llaves de AWS: el SDK usa el
@@ -335,10 +348,10 @@ Requisitos de la EC2 (paso 11, fuera de este repositorio):
   `FIREBASE_CREDENTIALS_PATH`; se monta como volumen de solo lectura en
   `/secrets/firebase-adminsdk.json`.
 
-## Observabilidad (DEV_08)
+## Observabilidad
 
-Sigue el dojo del curso "Monitoreo de EC2 con Prometheus y Grafana": en la EC2 solo corren
-exporters, y Prometheus y Grafana corren en la máquina de quien monitorea y leen esos exporters por
+En la EC2 solo corren
+exporters, mientras que Prometheus y Grafana corren en la máquina de quien monitorea y leen esos exporters por
 HTTP (modelo pull). Así no se instala en producción más de lo necesario.
 
 | Componente | Dónde | Puerto | Qué mide |
@@ -349,8 +362,8 @@ HTTP (modelo pull). Así no se instala en producción más de lo necesario.
 | Prometheus v3.16.0 | Máquina local, `observability/docker-compose.yml` | `19090` | Lee los tres puertos de la EC2 cada 15 s |
 | Grafana 13.3.1 | Máquina local, `observability/docker-compose.yml` | `13000` | Dashboards |
 
-Los puertos no estándar siguen la recomendación del dojo (OWASP). Las métricas del servicio están en
-el puerto de gestión `18001`, no en el `8085` de la API (Caso B del dojo): el `8085` puede ser público
+Los puertos no estándar siguen la recomendación de OWASP. Las métricas del servicio están en
+el puerto de gestión `18001`, no en el `8085` de la API: el `8085` puede ser público
 sin exponer las métricas.
 
 ### Security group
@@ -449,7 +462,7 @@ up
 
 ## Publicación en Docker Hub
 
-Publicación manual (los pasos 13/14 la automatizan en GitHub Actions). Sustituye `<usuario>` por
+Publicación manual. Sustituye `<usuario>` por
 el usuario de Docker Hub:
 
 ```bash
@@ -570,8 +583,8 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
 ### Pull requests
  
 - Todo cambio llega a `develop` por pull request; no se hace push directo.
-- **Título:** mismo formato que un commit, con la HU o tarea como alcance, en menos de 70
-  caracteres. Ejemplo: `feat(HU-06): filter drivers by status`.
+- **Título:** similar al formato de un commit, con la HU o tarea como alcance, en menos de 70
+  caracteres. Ejemplo: `Feat/hu 06 filter drivers by status`.
 - **Descripción:** se llena la plantilla `.github/pull_request_template.md`. Las secciones marcadas
   con `*` son obligatorias.
 - **Antes de pedir revisión:** el CI debe pasar (Checkstyle, pruebas, cobertura y SonarCloud). Los
@@ -580,7 +593,7 @@ Cada commit tiene un solo propósito y debe dejar el proyecto compilando con `./
 - Si el PR resuelve una limitación de la lista de abajo, se borra de esa lista en el mismo PR.
  
 
-## Infraestructura AWS (DEV_10)
+## Infraestructura AWS
 
 ### Recursos SNS / SQS (us-east-1)
 
@@ -671,8 +684,6 @@ Se asignó una Elastic IP a la instancia para que la dirección no cambie al rei
 
 - No están implementados la integración con Documentación ni el Circuit Breaker: URL del servicio,
   timeout de 2 s, 5 fallos consecutivos y 30 s con el circuito abierto.
-- Los eventos no están implementados todavía: el broker es AWS SNS + SQS con Transactional Outbox
-  (TEC_05); LocalStack para pruebas locales y de integración llega con DEV_09.
 - Faltan el listado de elegibles, el alta médica y el borrado lógico.
 - Los errores de validación usan códigos y estructura parcialmente distintos a los propuestos en el documento de historias de usuario que tenemos como grupo
   (`errors[].message` en lugar de `errors[].code`).
