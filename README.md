@@ -494,7 +494,8 @@ El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o 
 `workflow_dispatch` desde otro branch solo corre las pruebas. Flujo:
 
 1. **Pruebas:** `./gradlew clean build` (Checkstyle, pruebas y cobertura).
-2. **SonarCloud:** `./gradlew sonar`; si el Quality Gate falla, se detiene la publicación.
+2. **SonarCloud:** `./gradlew sonar`, solo en `main` (el plan gratuito no analiza otras ramas); si
+   el Quality Gate falla, se detiene la publicación.
 3. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
    y `latest`.
 4. **Sincronización y prevalidación:** por SSH/SCP, copia `docker-compose.prod.yml` a un directorio
