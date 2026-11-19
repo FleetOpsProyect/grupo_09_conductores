@@ -69,7 +69,7 @@ jobs:
 
   
   deploy:
-    name: Deploy backend and observability to EC2
+    name: Deploy backend and exporters to EC2
     needs: publish
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -89,14 +89,14 @@ jobs:
             set -eu
             mkdir -p "$HOME/app/.deploy-staging-${{ github.run_id }}-${{ github.run_attempt }}"
 
-      - name: Sync production Compose and observability configuration
+      - name: Sync production Compose configuration
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          source: docker-compose.prod.yml,observability
+          source: docker-compose.prod.yml
           target: ~/app/.deploy-staging-${{ github.run_id }}-${{ github.run_attempt }}
           overwrite: true
 
@@ -113,31 +113,22 @@ jobs:
 
             APP_DIR="$HOME/app"
             STAGING_DIR="$APP_DIR/.deploy-staging-${{ github.run_id }}-${{ github.run_attempt }}"
+            COMPOSE="docker compose -f $APP_DIR/docker-compose.prod.yml"
             trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
             test -f "$APP_DIR/.env"
             SERVER_PORT=$(grep '^SERVER_PORT=' "$APP_DIR/.env" | cut -d= -f2 || true)
             if [ "$SERVER_PORT" != "8085" ]; then
-              echo "SERVER_PORT in the EC2 .env must be 8085 for the backend healthcheck and Prometheus scrape target."
+              echo "SERVER_PORT in the EC2 .env must be 8085: docker-compose.prod.yml publishes the API on 8085."
               exit 1
             fi
-            if [ ! -s "$APP_DIR/secrets/grafana_admin_password" ]; then
-              echo "Missing persistent Grafana secret file: $APP_DIR/secrets/grafana_admin_password"
-              echo "Migrate the existing Grafana password to that file before enabling automated deployment."
-              exit 1
-            fi
-            SECRET_MODE=$(stat -c '%a' "$APP_DIR/secrets/grafana_admin_password")
-            if [ "$SECRET_MODE" != "600" ]; then
-              echo "Grafana secret file must have mode 600; fix its permissions before deployment."
-              exit 1
-            fi
-            if grep -q '^GRAFANA_ADMIN_PASSWORD=' "$APP_DIR/.env"; then
-              echo "Remove the old plaintext GRAFANA_ADMIN_PASSWORD entry from .env after migrating it to the secret file."
+            MANAGEMENT_PORT=$(grep '^MANAGEMENT_PORT=' "$APP_DIR/.env" | cut -d= -f2 || true)
+            if [ -n "$MANAGEMENT_PORT" ] && [ "$MANAGEMENT_PORT" != "18001" ]; then
+              echo "MANAGEMENT_PORT in the EC2 .env must be 18001 or unset: docker-compose.prod.yml publishes 18001."
               exit 1
             fi
 
             ln -s "$APP_DIR/.env" "$STAGING_DIR/.env"
-            ln -s "$APP_DIR/secrets" "$STAGING_DIR/secrets"
 
             echo "Validating staged Docker Compose configuration"
             if ! docker compose \
@@ -149,11 +140,7 @@ jobs:
             fi
 
             install -m 0644 "$STAGING_DIR/docker-compose.prod.yml" "$APP_DIR/docker-compose.prod.yml"
-            mkdir -p "$APP_DIR/observability"
-            cp -a "$STAGING_DIR/observability/." "$APP_DIR/observability/"
-
-            echo "Validating synchronized Docker Compose configuration"
-            docker compose -f "$APP_DIR/docker-compose.prod.yml" config --quiet
+            $COMPOSE config --quiet
 
             IMAGE_TAG="${{ github.sha }}"
             IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:$IMAGE_TAG"
@@ -161,7 +148,7 @@ jobs:
             PREVIOUS_TAG=$(grep '^IMAGE_TAG=' "$APP_DIR/.env" | cut -d= -f2 || true)
             BACKEND_OK=0
             BACKEND_UPDATE_ATTEMPTED=0
-            OBSERVABILITY_OK=1
+            EXPORTERS_OK=1
 
             echo "Deploying image $IMAGE (previous tag: ${PREVIOUS_TAG:-none})"
             if docker pull "$IMAGE"; then
@@ -173,10 +160,10 @@ jobs:
               fi
 
               BACKEND_UPDATE_ATTEMPTED=1
-              if docker compose -f "$APP_DIR/docker-compose.prod.yml" up -d --no-deps backend; then
-                echo "Checking application health"
+              if $COMPOSE up -d --no-deps backend; then
+                echo "Checking application health on the management port"
                 for i in $(seq 1 18); do
-                  if curl -fsS http://localhost:8085/health > /dev/null; then
+                  if curl -fsS http://localhost:18001/health > /dev/null; then
                     echo "Backend deployment successful ($IMAGE_TAG)"
                     BACKEND_OK=1
                     break
@@ -192,11 +179,11 @@ jobs:
 
             if [ "$BACKEND_OK" -ne 1 ]; then
               echo "Backend did not become healthy"
-              docker compose -f "$APP_DIR/docker-compose.prod.yml" ps
+              $COMPOSE ps
               if [ "$BACKEND_UPDATE_ATTEMPTED" -eq 1 ] && [ -n "$PREVIOUS_TAG" ]; then
                 echo "Rolling back backend to $PREVIOUS_TAG"
                 sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_TAG/" "$APP_DIR/.env"
-                if ! docker compose -f "$APP_DIR/docker-compose.prod.yml" up -d --no-deps backend; then
+                if ! $COMPOSE up -d --no-deps backend; then
                   echo "Backend rollback command failed"
                 fi
               elif [ "$BACKEND_UPDATE_ATTEMPTED" -eq 1 ]; then
@@ -206,68 +193,47 @@ jobs:
               fi
             fi
 
-            echo "Updating observability services independently from the backend"
-            for service in node-exporter prometheus grafana; do
-              if docker compose -f "$APP_DIR/docker-compose.prod.yml" up -d --no-deps "$service"; then
-                echo "Requested update for $service"
-              else
-                echo "Failed to update $service"
-                OBSERVABILITY_OK=0
-              fi
-            done
+            # --remove-orphans removes the Prometheus and Grafana containers of the previous setup:
+            # they now run on the local machine (observability/docker-compose.yml), not on the EC2.
+            echo "Updating exporters independently from the backend"
+            if ! $COMPOSE up -d --no-deps --remove-orphans node-exporter cadvisor; then
+              echo "Failed to update the exporters"
+              EXPORTERS_OK=0
+            fi
 
-            query_target_up() {
-              target_job="$1"
-              target_instance="$2"
-              result=$(docker compose -f "$APP_DIR/docker-compose.prod.yml" exec -T prometheus \
-                promtool query instant http://localhost:9090 "up{job=\"$target_job\"}" 2>&1) || return 1
-              printf '%s\n' "$result" \
-                | grep -F "instance=\"$target_instance\"" \
-                | grep -Fq '=> 1'
+            # check_metrics <url> <metric that must be present>
+            check_metrics() {
+              curl -fsS "$1" 2>/dev/null | grep -q "^$2"
             }
 
-            query_node_memory() {
-              result=$(docker compose -f "$APP_DIR/docker-compose.prod.yml" exec -T prometheus \
-                promtool query instant http://localhost:9090 \
-                'node_memory_MemTotal_bytes{job="node-exporter"}' 2>&1) || return 1
-              printf '%s\n' "$result" | grep -Eq '=> [0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?'
-            }
-
-            query_node_cpu() {
-              result=$(docker compose -f "$APP_DIR/docker-compose.prod.yml" exec -T prometheus \
-                promtool query instant http://localhost:9090 \
-                'node_cpu_seconds_total{job="node-exporter", mode="idle"}' 2>&1) || return 1
-              printf '%s\n' "$result" | grep -Eq '=> [0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?'
-            }
-
-            echo "Checking Prometheus targets and node_exporter CPU/memory metrics"
-            TARGETS_OK=0
+            echo "Checking that every exporter publishes metrics"
+            METRICS_OK=0
             for i in $(seq 1 18); do
-              if query_target_up "ms-conductores" "backend:8085" \
-                && query_target_up "node-exporter" "node-exporter:9100" \
-                && query_node_memory \
-                && query_node_cpu; then
-                TARGETS_OK=1
+              if check_metrics http://localhost:19100/metrics node_cpu_seconds_total \
+                && check_metrics http://localhost:19100/metrics node_filesystem_avail_bytes \
+                && check_metrics http://localhost:18080/metrics container_cpu_usage_seconds_total \
+                && { [ "$BACKEND_OK" -ne 1 ] || check_metrics http://localhost:18001/metrics http_server_requests_seconds_count; }; then
+                METRICS_OK=1
                 break
               fi
               sleep 5
             done
 
-            if [ "$TARGETS_OK" -eq 1 ]; then
-              echo "Prometheus targets are UP; node_exporter CPU and memory metrics are present"
+            if [ "$METRICS_OK" -eq 1 ]; then
+              echo "node_exporter (19100), cAdvisor (18080) and the service (18001) publish metrics"
             else
-              echo "Prometheus targets or node_exporter CPU/memory metrics did not become available"
-              OBSERVABILITY_OK=0
-              docker compose -f "$APP_DIR/docker-compose.prod.yml" ps
+              echo "Some exporter did not publish metrics in time"
+              EXPORTERS_OK=0
+              $COMPOSE ps
             fi
 
             if [ "$BACKEND_OK" -ne 1 ]; then
-              echo "Backend deployment failed; rollback was attempted. Observability was deployed and checked independently."
+              echo "Backend deployment failed; rollback was attempted. Exporters were deployed and checked independently."
               exit 1
             fi
-            if [ "$OBSERVABILITY_OK" -ne 1 ]; then
-              echo "Observability deployment or checks failed; backend remains on its healthy deployed version."
+            if [ "$EXPORTERS_OK" -ne 1 ]; then
+              echo "Exporter deployment or checks failed; backend remains on its healthy deployed version."
               exit 1
             fi
 
-            echo "Backend and observability deployment checks succeeded ($IMAGE_TAG)"
+            echo "Backend and exporter deployment checks succeeded ($IMAGE_TAG)"

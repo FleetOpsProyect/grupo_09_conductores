@@ -7,6 +7,13 @@
 #   se monta ningún archivo de credenciales de AWS.
 # - El JSON de la cuenta de servicio de Firebase se monta como volumen de solo lectura
 #   y la variable GOOGLE_APPLICATION_CREDENTIALS apunta a la ruta DENTRO del contenedor.
+#
+# Observabilidad (DEV_08, dojo "Monitoreo de EC2 con Prometheus y Grafana"):
+# - En la EC2 solo corren exporters. Prometheus y Grafana corren en la máquina local
+#   (observability/docker-compose.yml) y leen estos puertos por HTTP (modelo pull).
+# - Puertos no estándar: 18001 (métricas y salud del servicio), 19100 (node_exporter) y
+#   18080 (cAdvisor). El security group solo los admite desde la IP de quien monitorea
+#   ("Mi IP"), nunca desde 0.0.0.0/0.
 
 services:
   backend:
@@ -16,10 +23,12 @@ services:
       - .env
     ports:
       - "${SERVER_PORT:-8085}:8085"
+      # Puerto de gestión (Actuator): /health, /metrics e /info, separado del de la API.
+      - "18001:18001"
     volumes:
       - "${FIREBASE_CREDENTIALS_PATH:-./credentials/firebase-adminsdk.json}:/secrets/firebase-adminsdk.json:ro"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8085/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:18001/health > /dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -30,18 +39,20 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Métricas del sistema operativo de la EC2: CPU, memoria, disco y red (dojo, paso 1).
   node-exporter:
     image: quay.io/prometheus/node-exporter:v1.12.1
     restart: unless-stopped
     command:
       - --path.procfs=/host/proc
       - --path.sysfs=/host/sys
-      - --collector.disable-defaults
-      - --collector.cpu
-      - --collector.meminfo
+      - --path.rootfs=/host/root
+    ports:
+      - "19100:9100"
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
     read_only: true
     cap_drop:
       - ALL
@@ -53,42 +64,20 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  prometheus:
-    image: prom/prometheus:v3.16.0
+  # Métricas de cada contenedor Docker: CPU, memoria, red y disco (dojo, paso 2).
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
     restart: unless-stopped
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=7d
-      - --storage.tsdb.retention.size=512MB
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  grafana:
-    image: grafana/grafana:13.3.1
-    restart: unless-stopped
+      - --docker_only=true
+      - --housekeeping_interval=30s
     ports:
-      - "127.0.0.1:3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    secrets:
-      - grafana_admin_password
+      - "18080:8080"
     volumes:
-      - grafana_data:/var/lib/grafana
-      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      - prometheus
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
     security_opt:
       - no-new-privileges:true
     logging:
@@ -96,11 +85,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-volumes:
-  prometheus_data:
-  grafana_data:
-
-secrets:
-  grafana_admin_password:
-    file: ./secrets/grafana_admin_password
