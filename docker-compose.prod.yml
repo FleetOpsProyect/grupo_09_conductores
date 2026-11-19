@@ -29,3 +29,21 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.13.0
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.disable-defaults
+      - --collector.cpu
+      - --collector.meminfo
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

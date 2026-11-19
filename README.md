@@ -331,6 +331,48 @@ Requisitos de la EC2 (paso 11, fuera de este repositorio):
   `FIREBASE_CREDENTIALS_PATH`; se monta como volumen de solo lectura en
   `/secrets/firebase-adminsdk.json`.
 
+### node_exporter (DEV08-2)
+
+`docker-compose.prod.yml` incluye `node-exporter` para recoger las métricas de CPU y memoria del host
+Linux EC2. Antes de iniciarlo, comprueba los recursos disponibles y los contenedores actuales:
+
+```bash
+free -h
+df -h /
+docker stats --no-stream
+```
+
+La configuración monta `/proc` y `/sys` del host en solo lectura y solo activa los colectores `cpu` y
+`meminfo`. El contenedor no usa `privileged`, no comparte la red ni el PID del host, no publica el
+puerto 9100 y permanece en la red Docker de Compose para que Prometheus pueda consultarlo en el
+siguiente paso. Para iniciar únicamente este servicio durante la instalación controlada:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d node-exporter
+docker compose -f docker-compose.prod.yml ps node-exporter
+docker compose -f docker-compose.prod.yml logs --tail=50 node-exporter
+```
+
+Al integrar Prometheus (DEV08-3), se comprobarán las series `node_cpu_seconds_total`,
+`node_memory_MemTotal_bytes` y `node_memory_MemAvailable_bytes` en el target `node-exporter`. Las
+consultas para contrastar sus valores serán:
+
+```promql
+# CPU ocupada (%)
+100 * (1 - avg(rate(node_cpu_seconds_total{job="node-exporter", mode="idle"}[5m])))
+
+# Memoria usada (%)
+100 * (1 - node_memory_MemAvailable_bytes{job="node-exporter"}
+           / node_memory_MemTotal_bytes{job="node-exporter"})
+
+# Memoria usada (bytes)
+node_memory_MemTotal_bytes{job="node-exporter"}
+- node_memory_MemAvailable_bytes{job="node-exporter"}
+```
+
+La comprobación de scraping y de valores reales se hará al integrar Prometheus; esta configuración
+por sí sola no lo instala ni lo despliega.
+
 ## Publicación en Docker Hub
 
 Publicación manual (los pasos 13/14 la automatizan en GitHub Actions). Sustituye `<usuario>` por
