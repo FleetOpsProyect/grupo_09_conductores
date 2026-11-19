@@ -337,6 +337,7 @@ Requisitos de la EC2 (paso 11, fuera de este repositorio):
 Linux EC2. Antes de iniciarlo, comprueba los recursos disponibles y los contenedores actuales:
 
 ```bash
+docker compose version
 free -h
 df -h /
 docker stats --no-stream
@@ -370,8 +371,90 @@ node_memory_MemTotal_bytes{job="node-exporter"}
 - node_memory_MemAvailable_bytes{job="node-exporter"}
 ```
 
-La comprobación de scraping y de valores reales se hará al integrar Prometheus; esta configuración
-por sí sola no lo instala ni lo despliega.
+La comprobación de scraping y de valores reales se hará al integrar Prometheus.
+
+### Prometheus y Grafana (DEV08-3/4)
+
+La configuración versionada está en `observability/`: Prometheus scrapea `backend:8085/metrics` y
+`node-exporter:9100` cada 15 segundos, con timeout de 5 segundos. Ambos puertos permanecen solo en la
+red Docker de Compose. Prometheus conserva hasta 7 días de datos y limita la TSDB persistida a
+512 MB; los datos se guardan en volúmenes nombrados, al igual que los datos de Grafana. El datasource
+y el dashboard se aprovisionan desde archivos versionados y no se editan manualmente en la UI.
+
+Antes de instalar o actualizar estos servicios en EC2, mide RAM y disco libre con los comandos
+anteriores y confirma que `SERVER_PORT=8085` en el `.env` real. El tamaño de la instancia aún no está
+verificado; no se fijan límites de memoria arbitrarios. Prometheus, Grafana y node_exporter se suman
+al consumo de `ms-conductores`, Firestore, la JVM y Docker, por lo que valida el margen antes de
+arrancarlos.
+
+Prometheus y el backend se descubren por nombre de servicio en la red bridge privada del proyecto
+Compose. No marques esa red `internal`: el backend debe conservar salida hacia AWS y Firestore.
+La red Docker no protege por sí sola `/metrics`: como el puerto 8085 del backend sigue publicado,
+este endpoint continúa siendo accesible por esa misma interfaz pública. Este cambio no altera esa
+exposición; debe acordarse e implementarse una protección compatible antes de considerar cerrado
+ese riesgo.
+
+No guardes la contraseña de Grafana en el repositorio. Antes de iniciar Grafana, configura
+`GRAFANA_ADMIN_PASSWORD` de forma segura en el entorno de Compose de EC2. El secreto se entrega al
+contenedor como secret de Compose y no se escribe en la configuración versionada. Comprueba que la
+instalación inicial mantiene el puerto 3000 enlazado solo a `127.0.0.1`; no abras puertos 3000, 9090
+ni 9100 en el Security Group. En una sesión Bash interactiva puedes cargarla sin guardarla en el
+historial:
+
+```bash
+read -r -s -p "Grafana admin password: " GRAFANA_ADMIN_PASSWORD
+printf '\n'
+export GRAFANA_ADMIN_PASSWORD
+```
+
+Repite la carga desde el gestor de secretos aprobado si recreas el contenedor en otra sesión.
+
+Para una instalación controlada desde `~/app`, sincroniza `docker-compose.prod.yml` y todo el
+directorio `observability/` a la EC2, sin copiar `.env` desde el repositorio. Mantén el `.env` real y
+las credenciales de Firebase que ya están en la instancia. Una vez revisados recursos, secretos,
+`SERVER_PORT=8085` y archivos:
+
+```bash
+docker compose -f docker-compose.prod.yml config --quiet
+docker compose -f docker-compose.prod.yml up -d node-exporter prometheus grafana
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs --tail=100 node-exporter prometheus grafana
+```
+
+La operación es aditiva: el CD actual puede seguir actualizando solo `backend` con
+`up -d --no-deps backend`; no publiques Prometheus ni node_exporter. Para Grafana, abre un túnel desde
+tu equipo (sustituye el host por el de EC2):
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 <usuario>@<host-ec2>
+```
+
+Luego visita `http://localhost:3000` e inicia sesión con la contraseña configurada en EC2.
+
+Para verificar targets y series, consulta desde el contenedor Prometheus:
+
+```bash
+docker compose -f docker-compose.prod.yml exec prometheus \
+  promtool query instant http://localhost:9090 'up{job=~"ms-conductores|node-exporter"}'
+docker compose -f docker-compose.prod.yml exec prometheus \
+  promtool query instant http://localhost:9090 'node_memory_MemTotal_bytes{job="node-exporter"}'
+docker compose -f docker-compose.prod.yml exec prometheus \
+  promtool query instant http://localhost:9090 'node_memory_MemAvailable_bytes{job="node-exporter"}'
+```
+
+Ambos targets deben reportar `1`. Compara total y memoria disponible con `free -b` en la instancia
+EC2; verifica también las métricas `node_cpu_seconds_total` frente al uso reportado por el host. Que
+el contenedor esté ejecutándose no demuestra por sí solo que esté leyendo las métricas del host.
+Genera tráfico a `/drivers` para poblar paneles HTTP y espera varias ventanas de scraping. El p95 se
+calcula por ruta y método con el histograma de `http.server.requests`; la línea de 2 s marca el
+límite: cumplir el objetivo requiere p95 estrictamente menor a 2 s. Sin tráfico reciente puede no
+haber una estimación válida. Las respuestas 401/403 generadas por API Gateway antes de llegar al
+servicio no se cuentan.
+
+Los dashboards y el datasource sobreviven a recreaciones gracias al provisioning versionado. Los
+datos TSDB y SQLite de Grafana persisten en volúmenes nombrados; evita `docker compose down -v`, que
+los elimina. La retención de 7 días/512 MB limita el crecimiento, pero debe revisarse tras observar
+uso real de disco.
 
 ## Publicación en Docker Hub
 
