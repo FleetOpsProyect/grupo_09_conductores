@@ -69,12 +69,37 @@ jobs:
 
   
   deploy:
-    name: Deploy backend to EC2
+    name: Deploy backend and observability to EC2
     needs: publish
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout deployment configuration
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Prepare remote deployment staging directory
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            set -eu
+            mkdir -p "$HOME/app/.deploy-staging-${{ github.run_id }}-${{ github.run_attempt }}"
+
+      - name: Sync production Compose and observability configuration
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          source: docker-compose.prod.yml,observability
+          target: ~/app/.deploy-staging-${{ github.run_id }}-${{ github.run_attempt }}
+          overwrite: true
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
@@ -84,44 +109,165 @@ jobs:
           port: 22
           command_timeout: 5m
           script: |
-            set -e
-            cd ~/app
+            set -eu
+
+            APP_DIR="$HOME/app"
+            STAGING_DIR="$APP_DIR/.deploy-staging-${{ github.run_id }}-${{ github.run_attempt }}"
+            trap 'rm -rf -- "$STAGING_DIR"' EXIT
+
+            test -f "$APP_DIR/.env"
+            SERVER_PORT=$(grep '^SERVER_PORT=' "$APP_DIR/.env" | cut -d= -f2 || true)
+            if [ "$SERVER_PORT" != "8085" ]; then
+              echo "SERVER_PORT in the EC2 .env must be 8085 for the backend healthcheck and Prometheus scrape target."
+              exit 1
+            fi
+            if [ ! -s "$APP_DIR/secrets/grafana_admin_password" ]; then
+              echo "Missing persistent Grafana secret file: $APP_DIR/secrets/grafana_admin_password"
+              echo "Migrate the existing Grafana password to that file before enabling automated deployment."
+              exit 1
+            fi
+            SECRET_MODE=$(stat -c '%a' "$APP_DIR/secrets/grafana_admin_password")
+            if [ "$SECRET_MODE" != "600" ]; then
+              echo "Grafana secret file must have mode 600; fix its permissions before deployment."
+              exit 1
+            fi
+            if grep -q '^GRAFANA_ADMIN_PASSWORD=' "$APP_DIR/.env"; then
+              echo "Remove the old plaintext GRAFANA_ADMIN_PASSWORD entry from .env after migrating it to the secret file."
+              exit 1
+            fi
+
+            ln -s "$APP_DIR/.env" "$STAGING_DIR/.env"
+            ln -s "$APP_DIR/secrets" "$STAGING_DIR/secrets"
+
+            echo "Validating staged Docker Compose configuration"
+            if ! docker compose \
+              --project-directory "$STAGING_DIR" \
+              --env-file "$APP_DIR/.env" \
+              -f "$STAGING_DIR/docker-compose.prod.yml" config --quiet; then
+              echo "Staged Compose validation failed; production files and containers were not changed."
+              exit 1
+            fi
+
+            install -m 0644 "$STAGING_DIR/docker-compose.prod.yml" "$APP_DIR/docker-compose.prod.yml"
+            mkdir -p "$APP_DIR/observability"
+            cp -a "$STAGING_DIR/observability/." "$APP_DIR/observability/"
+
+            echo "Validating synchronized Docker Compose configuration"
+            docker compose -f "$APP_DIR/docker-compose.prod.yml" config --quiet
 
             IMAGE_TAG="${{ github.sha }}"
             IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/ms-conductores:$IMAGE_TAG"
 
-            PREVIOUS_TAG=$(grep '^IMAGE_TAG=' .env | cut -d= -f2 || true)
+            PREVIOUS_TAG=$(grep '^IMAGE_TAG=' "$APP_DIR/.env" | cut -d= -f2 || true)
+            BACKEND_OK=0
+            BACKEND_UPDATE_ATTEMPTED=0
+            OBSERVABILITY_OK=1
 
             echo "Deploying image $IMAGE (previous tag: ${PREVIOUS_TAG:-none})"
-            docker pull "$IMAGE"
+            if docker pull "$IMAGE"; then
+              echo "Updating backend image version"
+              if grep -q '^IMAGE_TAG=' "$APP_DIR/.env"; then
+                sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" "$APP_DIR/.env"
+              else
+                echo "IMAGE_TAG=$IMAGE_TAG" >> "$APP_DIR/.env"
+              fi
 
-            echo "Updating version"
-            if grep -q '^IMAGE_TAG=' .env; then
-              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" .env
+              BACKEND_UPDATE_ATTEMPTED=1
+              if docker compose -f "$APP_DIR/docker-compose.prod.yml" up -d --no-deps backend; then
+                echo "Checking application health"
+                for i in $(seq 1 18); do
+                  if curl -fsS http://localhost:8085/health > /dev/null; then
+                    echo "Backend deployment successful ($IMAGE_TAG)"
+                    BACKEND_OK=1
+                    break
+                  fi
+                  sleep 5
+                done
+              else
+                echo "Backend container update failed"
+              fi
             else
-              echo "IMAGE_TAG=$IMAGE_TAG" >> .env
+              echo "Unable to pull backend image $IMAGE"
             fi
 
-            echo "Recreating backend"
-            docker compose -f docker-compose.prod.yml up -d --no-deps backend
+            if [ "$BACKEND_OK" -ne 1 ]; then
+              echo "Backend did not become healthy"
+              docker compose -f "$APP_DIR/docker-compose.prod.yml" ps
+              if [ "$BACKEND_UPDATE_ATTEMPTED" -eq 1 ] && [ -n "$PREVIOUS_TAG" ]; then
+                echo "Rolling back backend to $PREVIOUS_TAG"
+                sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_TAG/" "$APP_DIR/.env"
+                if ! docker compose -f "$APP_DIR/docker-compose.prod.yml" up -d --no-deps backend; then
+                  echo "Backend rollback command failed"
+                fi
+              elif [ "$BACKEND_UPDATE_ATTEMPTED" -eq 1 ]; then
+                echo "No previous tag to roll back to"
+              else
+                echo "Backend update was not attempted; leaving the running backend unchanged"
+              fi
+            fi
 
-            echo "Checking application health"
+            echo "Updating observability services independently from the backend"
+            for service in node-exporter prometheus grafana; do
+              if docker compose -f "$APP_DIR/docker-compose.prod.yml" up -d --no-deps "$service"; then
+                echo "Requested update for $service"
+              else
+                echo "Failed to update $service"
+                OBSERVABILITY_OK=0
+              fi
+            done
+
+            query_target_up() {
+              target_job="$1"
+              target_instance="$2"
+              result=$(docker compose -f "$APP_DIR/docker-compose.prod.yml" exec -T prometheus \
+                promtool query instant http://localhost:9090 "up{job=\"$target_job\"}" 2>&1) || return 1
+              printf '%s\n' "$result" \
+                | grep -F "instance=\"$target_instance\"" \
+                | grep -Fq '=> 1'
+            }
+
+            query_node_memory() {
+              result=$(docker compose -f "$APP_DIR/docker-compose.prod.yml" exec -T prometheus \
+                promtool query instant http://localhost:9090 \
+                'node_memory_MemTotal_bytes{job="node-exporter"}' 2>&1) || return 1
+              printf '%s\n' "$result" | grep -Eq '=> [0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?'
+            }
+
+            query_node_cpu() {
+              result=$(docker compose -f "$APP_DIR/docker-compose.prod.yml" exec -T prometheus \
+                promtool query instant http://localhost:9090 \
+                'node_cpu_seconds_total{job="node-exporter", mode="idle"}' 2>&1) || return 1
+              printf '%s\n' "$result" | grep -Eq '=> [0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?'
+            }
+
+            echo "Checking Prometheus targets and node_exporter CPU/memory metrics"
+            TARGETS_OK=0
             for i in $(seq 1 18); do
-              if curl -fsS http://localhost:8085/health > /dev/null; then
-                echo "Deployment successful ($IMAGE_TAG)"
-                exit 0
+              if query_target_up "ms-conductores" "backend:8085" \
+                && query_target_up "node-exporter" "node-exporter:9100" \
+                && query_node_memory \
+                && query_node_cpu; then
+                TARGETS_OK=1
+                break
               fi
               sleep 5
             done
 
-            echo "Backend did not respond correctly"
-            docker compose -f docker-compose.prod.yml ps
-            if [ -n "$PREVIOUS_TAG" ]; then
-              echo "Rolling back to $PREVIOUS_TAG"
-              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_TAG/" .env
-              docker compose -f docker-compose.prod.yml up -d --no-deps backend
+            if [ "$TARGETS_OK" -eq 1 ]; then
+              echo "Prometheus targets are UP; node_exporter CPU and memory metrics are present"
             else
-              echo "No previous tag to roll back to"
+              echo "Prometheus targets or node_exporter CPU/memory metrics did not become available"
+              OBSERVABILITY_OK=0
+              docker compose -f "$APP_DIR/docker-compose.prod.yml" ps
             fi
-            exit 1
 
+            if [ "$BACKEND_OK" -ne 1 ]; then
+              echo "Backend deployment failed; rollback was attempted. Observability was deployed and checked independently."
+              exit 1
+            fi
+            if [ "$OBSERVABILITY_OK" -ne 1 ]; then
+              echo "Observability deployment or checks failed; backend remains on its healthy deployed version."
+              exit 1
+            fi
+
+            echo "Backend and observability deployment checks succeeded ($IMAGE_TAG)"

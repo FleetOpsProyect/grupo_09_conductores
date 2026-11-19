@@ -333,8 +333,9 @@ Requisitos de la EC2 (paso 11, fuera de este repositorio):
 
 ### node_exporter (DEV08-2)
 
-`docker-compose.prod.yml` incluye `node-exporter` para recoger las métricas de CPU y memoria del host
-Linux EC2. Antes de iniciarlo, comprueba los recursos disponibles y los contenedores actuales:
+`docker-compose.prod.yml` incluye `node-exporter` v1.12.1 para recoger las métricas de CPU y memoria
+del host Linux EC2. La instancia desplegada es una `t3.small` (2 GiB RAM); antes de actualizar los
+servicios, revisa el margen real de recursos y los contenedores actuales:
 
 ```bash
 docker compose version
@@ -394,20 +395,33 @@ este endpoint continúa siendo accesible por esa misma interfaz pública. Este c
 exposición; debe acordarse e implementarse una protección compatible antes de considerar cerrado
 ese riesgo.
 
-No guardes la contraseña de Grafana en el repositorio. Antes de iniciar Grafana, configura
-`GRAFANA_ADMIN_PASSWORD` de forma segura en el entorno de Compose de EC2. El secreto se entrega al
-contenedor como secret de Compose y no se escribe en la configuración versionada. Comprueba que la
-instalación inicial mantiene el puerto 3000 enlazado solo a `127.0.0.1`; no abras puertos 3000, 9090
-ni 9100 en el Security Group. En una sesión Bash interactiva puedes cargarla sin guardarla en el
-historial:
+No guardes la contraseña de Grafana en el repositorio. Compose lee el secret desde
+`~/app/secrets/grafana_admin_password`; el workflow no crea ni sobrescribe este archivo. Antes de
+habilitar el despliegue automático, migra una sola vez el valor de contraseña actual de Grafana
+(debe coincidir con la credencial válida en su base de datos persistente):
 
 ```bash
-read -r -s -p "Grafana admin password: " GRAFANA_ADMIN_PASSWORD
+cd ~/app
+install -d -m 700 secrets
+if [ -e secrets/grafana_admin_password ]; then
+  echo "El archivo ya existe; no se sobrescribió."
+  exit 1
+fi
+umask 077
+read -r -s -p "Contraseña admin actual de Grafana: " GRAFANA_ADMIN_PASSWORD
 printf '\n'
-export GRAFANA_ADMIN_PASSWORD
+printf '%s' "$GRAFANA_ADMIN_PASSWORD" > secrets/grafana_admin_password
+chmod 600 secrets/grafana_admin_password
+unset GRAFANA_ADMIN_PASSWORD
 ```
 
-Repite la carga desde el gestor de secretos aprobado si recreas el contenedor en otra sesión.
+Si esa contraseña estaba guardada como `GRAFANA_ADMIN_PASSWORD` en `.env`, elimina manualmente esa
+línea después de confirmar el archivo nuevo; no guardes una segunda copia en texto plano. El workflow
+rechaza el despliegue mientras esa variable antigua permanezca en `.env`.
+
+Verifica propiedad/permisos sin mostrar el contenido: `stat -c '%a %U %n' secrets/grafana_admin_password`
+(esperado: modo `600`, usuario operador). El workflow se detendrá antes de modificar Compose o
+contenedores si falta este archivo.
 
 Para una instalación controlada desde `~/app`, sincroniza `docker-compose.prod.yml` y todo el
 directorio `observability/` a la EC2, sin copiar `.env` desde el repositorio. Mantén el `.env` real y
@@ -493,10 +507,20 @@ El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o 
 2. **SonarCloud:** `./gradlew sonar`; si el Quality Gate falla, se detiene la publicación.
 3. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
    y `latest`.
-4. **Despliegue:** por SSH a la EC2, `docker compose -f docker-compose.prod.yml up -d` con la
-   nueva etiqueta.
-5. **Verificación:** se consulta `/health`; si no responde `200`, se revierte automáticamente a la
-   etiqueta anterior.
+4. **Sincronización y prevalidación:** por SSH/SCP, se copian `docker-compose.prod.yml` y
+   `observability/` a un directorio temporal único bajo `~/app`. El workflow comprueba que existen
+   `.env`, `SERVER_PORT=8085` y el secret persistente de Grafana con permisos `600`; también rechaza
+   una contraseña Grafana duplicada en texto plano dentro de `.env`. Enlaza `.env` y `secrets/` solo
+   para validar la configuración temporal con `docker compose config --quiet`, y luego promueve los
+   archivos versionados sin borrar directorios ni archivos de producción.
+5. **Backend:** se conserva el despliegue de la imagen etiquetada con `github.sha`, el chequeo de
+   `/health` y el rollback al tag anterior si falla la actualización. Si la descarga de la imagen
+   falla, el contenedor backend no se recrea.
+6. **Observabilidad:** `node-exporter`, `prometheus` y `grafana` se actualizan por separado con
+   `up -d --no-deps`; esto no recrea el backend. Luego se consultan los targets de Prometheus y las
+   métricas de CPU/memoria de node_exporter. Un fallo marca el workflow como fallido, pero no revierte
+   un backend que ya quedó saludable. El flujo no termina anticipadamente al validar salud; se
+   ejecutan ambas ramas de verificación.
 
 Secretos de GitHub necesarios:
 
@@ -504,9 +528,12 @@ Secretos de GitHub necesarios:
 - `EC2_HOST`, `EC2_USER` y `EC2_SSH_KEY` (clave privada de un par dedicado al pipeline, no una
   clave personal).
 
-En la EC2, dentro de `~/app`, deben existir: `docker-compose.prod.yml`, un `.env` creado desde
-`.env.prod.example` y el JSON de la cuenta de servicio de Firebase (permisos `600`, montado como
-volumen de solo lectura). Ninguno de estos archivos se versiona.
+Antes de habilitar este workflow, en EC2 deben existir el `.env` real, el archivo
+`secrets/grafana_admin_password` migrado manualmente, y el JSON de cuenta de servicio de Firebase
+(permisos `600`, montado como volumen de solo lectura). El workflow nunca copia `.env` ni
+credenciales/secrets locales; solo sincroniza `docker-compose.prod.yml` y `observability/`.
+No abras puertos públicos 3000, 9090 ni 9100. Como el puerto 8085 conserva su publicación actual,
+`/metrics` también sigue expuesto a través de ese puerto hasta que se implemente su protección.
 
 Rollback manual: define `IMAGE_TAG=<SHA anterior>` en el `.env` de la EC2 y ejecuta
 `docker compose -f docker-compose.prod.yml up -d --no-deps backend`.
