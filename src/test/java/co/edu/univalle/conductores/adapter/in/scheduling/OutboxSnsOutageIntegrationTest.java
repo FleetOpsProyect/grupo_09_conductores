@@ -6,6 +6,8 @@ import static org.awaitility.Awaitility.await;
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
 import co.edu.univalle.conductores.application.port.out.EventPublisherPort;
+import co.edu.univalle.conductores.config.FirestoreConfig;
+import co.edu.univalle.conductores.config.FirestoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
@@ -15,6 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -26,38 +29,62 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.web.client.RestClient;
+import org.testcontainers.containers.GenericContainer;
 
 /**
  * TEC05-2: prueba de punta a punta del outbox con SNS caído. Con el publicador programado activo,
  * {@code POST /drivers} responde 201 aunque SNS no responda; el evento queda PENDING y suma
  * {@code attempts}, y cuando SNS vuelve se publica en una pasada siguiente y queda SENT.
  *
- * <p>SNS se simula con un {@link EventPublisherPort} que falla mientras está "caído". El contexto es
- * propio y se cierra al terminar ({@link DirtiesContext}), para que el publicador no siga activo en
- * las demás pruebas de integración, que comparten el emulador de Firestore.
+ * <p>SNS se simula con un {@link EventPublisherPort} que falla mientras está "caído". La clase usa su
+ * propio emulador de Firestore: el publicador marca SENT todos los eventos PENDING que encuentra, y
+ * en el emulador compartido cambiaría los eventos que otras pruebas esperan ver PENDING. El contexto
+ * se cierra al terminar ({@link DirtiesContext}) para detener el publicador.
  */
 @DirtiesContext
 @TestPropertySource(properties = {
     "app.outbox.publisher-enabled=true",
-    "app.outbox.publish-interval-ms=200",
-    // Lote grande: el emulador compartido puede tener eventos PENDING de otras pruebas.
-    "app.outbox.batch-size=500"
+    "app.outbox.publish-interval-ms=200"
 })
 class OutboxSnsOutageIntegrationTest extends BaseIntegrationTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
     private static final String OUTBOX_COLLECTION = "outbox_events";
+    private static final String PROJECT_ID = "demo-conductores";
+
+    private static final GenericContainer<?> OWN_EMULATOR = newFirestoreEmulator();
+
+    static {
+        OWN_EMULATOR.start();
+    }
+
+    @TestBean(name = "firestore", methodName = "isolatedFirestore")
+    private Firestore firestore;
 
     @LocalServerPort
     private int port;
 
     @Autowired
-    private Firestore firestore;
-
-    @Autowired
     private SwitchableEventPublisher sns;
+
+    /**
+     * Factory for the {@code firestore} bean override: the production client configuration, pointed
+     * at this class's own emulator.
+     *
+     * @return Firestore client for {@link #OWN_EMULATOR}
+     */
+    static Firestore isolatedFirestore() {
+        return new FirestoreConfig().firestore(PROJECT_ID, ownEmulatorHost(),
+                new FirestoreProperties(Duration.ofSeconds(2)));
+    }
+
+    @BeforeAll
+    static void usesOwnEmulator(@Autowired Firestore firestore) {
+        assertThat(firestore.getOptions().getEmulatorHost()).isEqualTo(ownEmulatorHost());
+    }
 
     @Test
     void driverIsCreatedWhileSnsIsDownAndEventIsPublishedWhenSnsReturns() throws Exception {
@@ -110,6 +137,10 @@ class OutboxSnsOutageIntegrationTest extends BaseIntegrationTest {
                 .body(body)
                 .retrieve()
                 .toEntity(String.class);
+    }
+
+    private static String ownEmulatorHost() {
+        return OWN_EMULATOR.getHost() + ":" + OWN_EMULATOR.getMappedPort(FIRESTORE_PORT);
     }
 
     private static String uniqueDocument() {
