@@ -32,7 +32,8 @@ Toda la configuración llega por variables de entorno (DEV_04). La columna **Loc
 
 | Variable | Descripción | Local | Producción | Estado |
 | :--- | :--- | :--- | :--- | :--- |
-| `SERVER_PORT` | Puerto HTTP del servicio. | `8085` | `8085` | Implementada |
+| `SERVER_PORT` | Puerto HTTP de la API. | `8085` | `8085` | Implementada |
+| `MANAGEMENT_PORT` | Puerto de `/health`, `/metrics` e `/info` (Actuator), separado del de la API para no exponer las métricas por el puerto público. | `18001` | `18001` | Implementada |
 | `FIREBASE_PROJECT_ID` | Proyecto de Firebase/Firestore. | `demo-conductores` | id del proyecto real de Firebase | Implementada |
 | `FIREBASE_EMULATOR_HOST` | `host:puerto` del emulador de Firestore. | `localhost:8180` (Compose usa `firestore-emulator:8080`) | vacío | Implementada |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Ruta, dentro del contenedor, al JSON de la cuenta de servicio de Firebase. | sin definir (emulador) | `/secrets/firebase-adminsdk.json` | Implementada |
@@ -115,9 +116,9 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 | `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `POST` | `/drivers/{id}/medical-release` | Registra el alta médica de un conductor (HU-10). Responde `200`, `400`, `404`, `409` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
-| `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. |
-| `GET` | `/metrics` | Métricas en formato Prometheus. |
-| `GET` | `/info` | Información del servicio. |
+| `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. Puerto de gestión (`18001`). |
+| `GET` | `/metrics` | Métricas en formato Prometheus. Puerto de gestión (`18001`). |
+| `GET` | `/info` | Información del servicio. Puerto de gestión (`18001`). |
 | `GET` | `/v3/api-docs` | Especificación OpenAPI en JSON, con propiedades en snake_case. |
 | `GET` | `/swagger-ui.html` | Interfaz Swagger UI. |
 
@@ -176,8 +177,11 @@ curl -X POST http://localhost:8085/drivers \
   }'
 ```
 
-Los endpoints de gestión usan la raíz del servicio: `/health`, `/metrics` e `/info`, no
-`/actuator/*`.
+Los endpoints de gestión usan la raíz del servicio (`/health`, `/metrics` e `/info`, no `/actuator/*`)
+y un puerto propio, `MANAGEMENT_PORT` (`18001`), separado del de la API (`8085`). Así el puerto de la API
+puede ser público sin exponer las métricas, como pide el dojo de monitoreo (Caso B). Por ejemplo:
+`curl http://localhost:18001/health` y `curl http://localhost:18001/metrics`. En el puerto `8085`,
+esas rutas responden `404`.
 
 En `/metrics`, las métricas de eventos son:
 
@@ -331,6 +335,118 @@ Requisitos de la EC2 (paso 11, fuera de este repositorio):
   `FIREBASE_CREDENTIALS_PATH`; se monta como volumen de solo lectura en
   `/secrets/firebase-adminsdk.json`.
 
+## Observabilidad (DEV_08)
+
+Sigue el dojo del curso "Monitoreo de EC2 con Prometheus y Grafana": en la EC2 solo corren
+exporters, y Prometheus y Grafana corren en la máquina de quien monitorea y leen esos exporters por
+HTTP (modelo pull). Así no se instala en producción más de lo necesario.
+
+| Componente | Dónde | Puerto | Qué mide |
+| :--- | :--- | :--- | :--- |
+| Métricas del servicio (Actuator) | EC2, contenedor `backend` | `18001` | HTTP por endpoint (con histograma para el p95), eventos consumidos y publicados, outbox, JVM |
+| node_exporter v1.12.1 | EC2, `docker-compose.prod.yml` | `19100` | CPU, memoria, disco y red del sistema operativo |
+| cAdvisor v0.55.1 | EC2, `docker-compose.prod.yml` | `18080` | CPU, memoria, red y disco de cada contenedor |
+| Prometheus v3.16.0 | Máquina local, `observability/docker-compose.yml` | `19090` | Lee los tres puertos de la EC2 cada 15 s |
+| Grafana 13.3.1 | Máquina local, `observability/docker-compose.yml` | `13000` | Dashboards |
+
+Los puertos no estándar siguen la recomendación del dojo (OWASP). Las métricas del servicio están en
+el puerto de gestión `18001`, no en el `8085` de la API (Caso B del dojo): el `8085` puede ser público
+sin exponer las métricas.
+
+### Security group
+
+Los puertos de métricas nunca se abren a `0.0.0.0/0`. En el security group de la EC2, añade una regla
+por puerto con origen **"Mi IP"** de quien vaya a monitorear:
+
+| Puerto | Uso | Origen |
+| :--- | :--- | :--- |
+| `19100` | node_exporter | Mi IP |
+| `18080` | cAdvisor | Mi IP |
+| `18001` | Métricas y salud del servicio | Mi IP |
+
+Si tu IP cambia (pasa a menudo en conexiones domésticas), actualiza las reglas. Comprueba el acceso
+desde tu máquina:
+
+```bash
+curl -s http://<EC2_IP>:19100/metrics | head -5
+curl -s http://<EC2_IP>:18080/metrics | head -5
+curl -s http://<EC2_IP>:18001/metrics | head -5
+```
+
+Un timeout significa que falta la regla o que el contenedor no está corriendo (`docker ps` en la EC2).
+
+### Exporters en la EC2
+
+El CD los despliega junto con el backend (ver "Despliegue continuo"). Para levantarlos a mano en la
+EC2:
+
+```bash
+cd ~/app
+docker compose -f docker-compose.prod.yml up -d node-exporter cadvisor
+docker compose -f docker-compose.prod.yml ps
+```
+
+node_exporter monta `/proc`, `/sys` y la raíz del host en solo lectura, sin capacidades y con
+`no-new-privileges`. cAdvisor monta en solo lectura los directorios que indica el dojo y se limita a
+contenedores Docker (`--docker_only`), revisando cada 30 s para reducir su consumo. La instancia es una
+`t3.small` (2 GiB de RAM); revisa el margen con `free -h` y `docker stats --no-stream` después de
+desplegar.
+
+### Prometheus y Grafana en tu máquina
+
+Desde la carpeta `observability/`:
+
+```bash
+cp .env.example .env     # pon en EC2_IP la Elastic IP de la EC2
+docker compose up -d
+```
+
+- **Prometheus:** http://localhost:19090. En **Status → Target health**, los jobs `ms-conductores`,
+  `node-exporter` y `cadvisor` deben estar en *UP*, y la consulta `up` debe devolver `1` en cada uno.
+- **Grafana:** http://localhost:13000. La primera vez entra con `admin` / `admin` y Grafana pide
+  cambiar la contraseña. El data source de Prometheus y los dashboards se cargan solos, en la carpeta
+  **FleetOps**.
+
+Los targets de `prometheus/prometheus.yml` usan el nombre `ec2-conductores`, que el compose resuelve
+con `EC2_IP`. Así nadie tiene que editar la configuración cuando cambia la IP. Para probar todo contra
+tu propia máquina, usa `EC2_IP=host-gateway` y levanta en local el backend (`docker compose up -d` en
+la raíz) y los exporters (`docker compose -f docker-compose.prod.yml up -d node-exporter cadvisor`).
+
+Prometheus guarda hasta 7 días o 512 MB en un volumen de Docker. Solo hay datos mientras tu Prometheus
+local está encendido; el histórico queda en tu máquina. `docker compose down -v` borra esos datos.
+
+### Dashboards
+
+| Dashboard | Archivo | Contenido |
+| :--- | :--- | :--- |
+| FleetOps - ms-conductores | `grafana/dashboards/fleetops-ms-conductores.json` | Peticiones por segundo por endpoint, porcentaje de errores, CPU y memoria de la EC2, y p95 de latencia por endpoint con la meta de 2 s |
+| Node Exporter Full (ID 1860) | `grafana/dashboards/node-exporter-full-1860.json` | Dashboard de la comunidad que propone el dojo: CPU, memoria, disco, red y sistema. Revisión 46 descargada de grafana.com (licencia LGPL-3.0, autor rfmoz) |
+
+El p95 se calcula por ruta y método con el histograma de `http.server.requests`; cumplir la meta
+requiere un p95 estrictamente menor a 2 s. Sin tráfico reciente no hay una estimación válida: genera
+peticiones a `/drivers` y espera varias ventanas de scraping. Los 401/403 que responde API Gateway no
+llegan al servicio y no se cuentan.
+
+Consultas útiles en Prometheus:
+
+```promql
+# CPU ocupada de la EC2 (%)
+100 * (1 - avg(rate(node_cpu_seconds_total{job="node-exporter", mode="idle"}[5m])))
+
+# Memoria usada de la EC2 (%)
+100 * (1 - node_memory_MemAvailable_bytes{job="node-exporter"}
+           / node_memory_MemTotal_bytes{job="node-exporter"})
+
+# Espacio libre en disco
+node_filesystem_avail_bytes{job="node-exporter"}
+
+# CPU por contenedor
+rate(container_cpu_usage_seconds_total{job="cadvisor", name!=""}[5m])
+
+# Estado de todos los targets
+up
+```
+
 ## Publicación en Docker Hub
 
 Publicación manual (los pasos 13/14 la automatizan en GitHub Actions). Sustituye `<usuario>` por
@@ -368,10 +484,19 @@ El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o 
 2. **SonarCloud:** `./gradlew sonar`; si el Quality Gate falla, se detiene la publicación.
 3. **Imagen:** se construye y publica en Docker Hub con dos etiquetas: el SHA completo del commit
    y `latest`.
-4. **Despliegue:** por SSH a la EC2, `docker compose -f docker-compose.prod.yml up -d` con la
-   nueva etiqueta.
-5. **Verificación:** se consulta `/health`; si no responde `200`, se revierte automáticamente a la
-   etiqueta anterior.
+4. **Sincronización y prevalidación:** por SSH/SCP, copia `docker-compose.prod.yml` a un directorio
+   temporal bajo `~/app`. Comprueba que existe `.env`, que `SERVER_PORT=8085` y que `MANAGEMENT_PORT`
+   es `18001` o no está definido. Valida la configuración temporal con `docker compose config --quiet`
+   y solo entonces reemplaza `docker-compose.prod.yml` en producción.
+5. **Backend:** despliega la imagen etiquetada con `github.sha`, comprueba `/health` en el puerto de
+   gestión (`18001`) y vuelve al tag anterior si falla. Si la descarga de la imagen falla, el backend
+   no se recrea.
+6. **Exporters:** actualiza `node-exporter` y `cadvisor` sin recrear el backend. Con
+   `--remove-orphans` elimina los contenedores de servicios que ya no están en el compose (por
+   ejemplo, el Prometheus y el Grafana de la configuración anterior, que ahora corren en local).
+   Después comprueba que el `19100` publica CPU y disco, que el `18080` publica CPU por contenedor y
+   que el `18001` publica métricas HTTP. Un fallo marca el workflow como fallido, pero no revierte un
+   backend que ya quedó saludable.
 
 Secretos de GitHub necesarios:
 
@@ -379,9 +504,10 @@ Secretos de GitHub necesarios:
 - `EC2_HOST`, `EC2_USER` y `EC2_SSH_KEY` (clave privada de un par dedicado al pipeline, no una
   clave personal).
 
-En la EC2, dentro de `~/app`, deben existir: `docker-compose.prod.yml`, un `.env` creado desde
-`.env.prod.example` y el JSON de la cuenta de servicio de Firebase (permisos `600`, montado como
-volumen de solo lectura). Ninguno de estos archivos se versiona.
+Antes de habilitar este workflow, en la EC2 deben existir el `.env` real y el JSON de la cuenta de
+servicio de Firebase (permisos `600`, montado como volumen de solo lectura). El workflow nunca copia
+`.env` ni credenciales; solo sincroniza `docker-compose.prod.yml`. Los puertos `18001`, `19100` y
+`18080` solo se abren a "Mi IP" de quien monitorea (ver "Observabilidad").
 
 Rollback manual: define `IMAGE_TAG=<SHA anterior>` en el `.env` de la EC2 y ejecuta
 `docker compose -f docker-compose.prod.yml up -d --no-deps backend`.
@@ -520,8 +646,12 @@ perfil de instancia (rol IAM).
 | :--- | :--- | :--- | :--- |
 | 22 | TCP | `0.0.0.0/0` | SSH del workflow CD y del equipo. Excepción documentada: las IPs de GitHub Actions cambian |
 | 8085 | TCP | `0.0.0.0/0` | **Limitación**: API Gateway llega sin VPC Link, así que no se puede limitar a su origen |
+| 18001 | TCP | Mi IP | Métricas y salud del servicio, para el Prometheus local (DEV_08) |
+| 19100 | TCP | Mi IP | node_exporter, para el Prometheus local (DEV_08) |
+| 18080 | TCP | Mi IP | cAdvisor, para el Prometheus local (DEV_08) |
 
-Las dos reglas están abiertas a Internet y son limitaciones conocidas. Para cerrar el 8085 hace falta un
+Las reglas de 22 y 8085 están abiertas a Internet y son limitaciones conocidas; las de métricas solo
+admiten la IP de quien monitorea. Para cerrar el 8085 hace falta un
 VPC Link entre API Gateway y la EC2; para cerrar el 22, desplegar con AWS Systems Manager en vez de SSH.
 
 ### Elastic IP
@@ -551,7 +681,7 @@ Se asignó una Elastic IP a la instancia para que la dirección no cambie al rei
 - `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda
   `created_at`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- No hay logs estructurados JSON ni dashboards de Grafana por ahora.
+- No hay logs estructurados JSON por ahora (TEC_03).
 - `PUT /drivers/{id}` no acepta `document_number`, así que no responde
   `400 NOT_EDITABLE` cuando llega con un valor distinto (HU-08, criterio 2); por eso tampoco
   aparece en la especificación OpenAPI.

@@ -37,6 +37,16 @@ springdoc:
     try-it-out-enabled: true
 
 management:
+  # Actuator (/health, /metrics, /info) en un puerto propio, separado del de la API (dojo de monitoreo,
+  # Caso B): el puerto de la API puede quedar público sin exponer las métricas.
+  server:
+    port: ${MANAGEMENT_PORT:18001}
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 2s
   endpoints:
     web:
       base-path: /

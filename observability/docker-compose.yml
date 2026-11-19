@@ -1,0 +1,45 @@
+# Prometheus y Grafana en la máquina local (dojo "Monitoreo de EC2 con Prometheus y Grafana", pasos 5 y 6).
+#
+# Uso, desde la carpeta observability/:
+#   cp .env.example .env      # y pon en EC2_IP la Elastic IP de la EC2
+#   docker compose up -d
+# Prometheus: http://localhost:19090   Grafana: http://localhost:13000 (admin/admin la primera vez)
+#
+# Nada de esto corre en la EC2: allí solo están los exporters (docker-compose.prod.yml).
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=512MB
+    ports:
+      - "19090:9090"
+    extra_hosts:
+      # Nombre de los targets de prometheus.yml. Con EC2_IP=host-gateway apunta a tu propia máquina.
+      - "ec2-conductores:${EC2_IP:?Define EC2_IP en observability/.env}"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    restart: unless-stopped
+    ports:
+      - "13000:3000"
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

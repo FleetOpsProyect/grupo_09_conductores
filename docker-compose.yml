@@ -12,6 +12,7 @@ services:
       SPRING_CLOUD_AWS_ENDPOINT: http://localstack:4566
     ports:
       - "${SERVER_PORT:-8085}:${SERVER_PORT:-8085}"
+      - "${MANAGEMENT_PORT:-18001}:${MANAGEMENT_PORT:-18001}"
     depends_on:
       firestore-emulator:
         condition: service_healthy

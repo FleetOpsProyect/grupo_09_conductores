@@ -7,6 +7,7 @@ import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.EventMetricsPort;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,10 +24,28 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
     @LocalServerPort
     private int port;
 
+    @LocalManagementPort
+    private int managementPort;
+
+    @Test
+    void metricsAreNotServedOnTheApiPort() {
+        ResponseEntity<String> response = RestClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .defaultStatusHandler(status -> true, (request, clientResponse) -> { })
+                .build()
+                .get()
+                .uri("/metrics")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).doesNotContain("jvm_memory_used_bytes");
+    }
+
     @Test
     void metricsAreExposedAtMetricsPath() {
         ResponseEntity<String> response = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
+                .baseUrl("http://localhost:" + managementPort)
                 .build()
                 .get()
                 .uri("/metrics")
@@ -39,13 +58,49 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void httpRequestHistogramsAreExposedWithPrometheusNamesAndTags() {
+        ResponseEntity<String> driversResponse = RestClient.builder()
+                .baseUrl("http://localhost:" + port)
+                .build()
+                .get()
+                .uri("/drivers")
+                .retrieve()
+                .toEntity(String.class);
+        assertThat(driversResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<String> metricsResponse = RestClient.builder()
+                .baseUrl("http://localhost:" + managementPort)
+                .build()
+                .get()
+                .uri("/metrics")
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(metricsResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String metrics = metricsResponse.getBody();
+        assertThat(metrics.lines()
+                .filter(line -> line.startsWith("http_server_requests_seconds_count{")
+                        && line.contains("uri=\"/drivers\""))
+                .toList())
+                .singleElement()
+                .satisfies(line -> assertThat(line).contains("method=\"GET\"", "status=\"200\""));
+        assertThat(metrics.lines()
+                .filter(line -> line.startsWith("http_server_requests_seconds_bucket{")
+                        && line.contains("uri=\"/drivers\"")
+                        && line.contains("le=\"2.0\""))
+                .toList())
+                .singleElement()
+                .satisfies(line -> assertThat(line).contains("method=\"GET\"", "status=\"200\""));
+    }
+
+    @Test
     void eventPublicationMetricsAreExposedInPrometheusFormat() {
         eventMetrics.recordPublished("driver_activated_event");
         eventMetrics.recordPublicationFailure("driver_activated_event");
         eventMetrics.setPendingEvents(3);
 
         ResponseEntity<String> response = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
+                .baseUrl("http://localhost:" + managementPort)
                 .build()
                 .get()
                 .uri("/metrics")
@@ -69,7 +124,7 @@ class MetricsEndpointIntegrationTest extends BaseIntegrationTest {
         consumerMetrics.recordDlq("document_expired_event", "max_retries");
 
         ResponseEntity<String> response = RestClient.builder()
-                .baseUrl("http://localhost:" + port)
+                .baseUrl("http://localhost:" + managementPort)
                 .build()
                 .get()
                 .uri("/metrics")
