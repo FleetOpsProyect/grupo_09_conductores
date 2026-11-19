@@ -34,10 +34,14 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Build and test
+        run: ./gradlew clean build jacocoTestReport
+
+      - name: SonarCloud analysis
+        if: github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: ./gradlew clean build jacocoTestReport sonar
+        run: ./gradlew sonar
 
   publish:
     needs: test
