@@ -19,10 +19,10 @@ server:
 logging:
   # Logs en JSON con el esquema ECS de Spring Boot (TEC_03), más el contexto (MDC) como campos propios:
   # correlation_id, http_method y http_path en las peticiones HTTP; event_id, event_type y correlation_id
-  # en los eventos consumidos y publicados.
+  # en los eventos consumidos y publicados. LOG_FORMAT vacío vuelve al texto plano (solo en local).
   structured:
     format:
-      console: ecs
+      console: ${LOG_FORMAT:ecs}
     json:
       # Enmascara emails y teléfonos en cualquier campo de texto del log.
       customizer: co.edu.univalle.conductores.config.logging.ContactDataMaskingCustomizer
