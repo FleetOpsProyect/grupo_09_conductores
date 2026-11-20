@@ -228,9 +228,11 @@ public class DriverController {
      */
     @Operation(summary = "Modificar los datos de un conductor (HU-08)",
         description = """
-            Reemplaza los campos editables (full_name, email y phone) con las mismas reglas del \
-            registro. El cuerpo debe traer todos los campos obligatorios. El status del conductor \
-            no cambia.
+            Modifica los campos editables (full_name, email y phone) con las mismas reglas del \
+            registro. El cuerpo debe traer los obligatorios, full_name y email; si falta uno, \
+            responde 400 con REQUIRED para ese campo. phone es opcional: si la clave no llega, se \
+            mantiene el teléfono guardado; si llega "phone": null, se borra; si llega un valor, se \
+            reemplaza. El status del conductor no cambia.
 
             """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
@@ -257,7 +259,7 @@ public class DriverController {
     @PutMapping("/{id}")
     public DriverResponse update(@PathVariable String id, @Valid @RequestBody UpdateDriverRequest request) {
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
-                request.fullName(), request.email(), request.phone()));
+                request.getFullName(), request.getEmail(), request.isPhonePresent(), request.getPhone()));
         return DriverResponse.from(driver);
     }
 

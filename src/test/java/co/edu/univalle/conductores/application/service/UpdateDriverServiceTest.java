@@ -47,6 +47,45 @@ class UpdateDriverServiceTest {
     }
 
     @Test
+    void missingPhoneKeepsTheStoredPhone() {
+        Driver driver = driverWithPhone("3001234567");
+
+        Driver result = new UpdateDriverService(repository, CLOCK)
+                .update(driver.getId(), UpdateDriver.Command.keepingPhone("Carlos A. Pérez", "nuevo@correo.com"));
+
+        assertThat(result.getPhone()).isEqualTo("3001234567");
+        assertThat(result.getFullName()).isEqualTo("Carlos A. Pérez");
+        verify(repository).save(driver);
+    }
+
+    @Test
+    void nullPhoneErasesTheStoredPhone() {
+        Driver driver = driverWithPhone("3001234567");
+
+        Driver result = new UpdateDriverService(repository, CLOCK)
+                .update(driver.getId(), new UpdateDriver.Command("Carlos Pérez", "carlos@correo.com", null));
+
+        assertThat(result.getPhone()).isNull();
+    }
+
+    @Test
+    void phoneValueReplacesTheStoredPhone() {
+        Driver driver = driverWithPhone("3001234567");
+
+        Driver result = new UpdateDriverService(repository, CLOCK)
+                .update(driver.getId(), new UpdateDriver.Command("Carlos Pérez", "carlos@correo.com", "3159876543"));
+
+        assertThat(result.getPhone()).isEqualTo("3159876543");
+    }
+
+    private Driver driverWithPhone(String phone) {
+        Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", phone,
+                OffsetDateTime.now(CLOCK));
+        when(repository.findById(driver.getId())).thenReturn(Optional.of(driver));
+        return driver;
+    }
+
+    @Test
     void updateThrowsWhenDriverDoesNotExistAndSavesNothing() {
         UUID id = UUID.randomUUID();
         when(repository.findById(id)).thenReturn(Optional.empty());

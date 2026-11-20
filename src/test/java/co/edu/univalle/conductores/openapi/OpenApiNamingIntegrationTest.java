@@ -39,8 +39,8 @@ class OpenApiNamingIntegrationTest extends BaseIntegrationTest {
                 .contains("full_name", "document_number")
                 .doesNotContain("fullName", "documentNumber");
         assertThat(properties(schemas, "UpdateDriverRequest"))
-                .contains("full_name")
-                .doesNotContain("fullName");
+                .containsExactlyInAnyOrder("full_name", "email", "phone")
+                .doesNotContain("fullName", "phone_present", "phonePresent");
     }
 
     private static Set<String> properties(JsonNode schemas, String schema) {

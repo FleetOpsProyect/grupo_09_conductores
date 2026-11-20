@@ -30,7 +30,8 @@ public class UpdateDriverService implements UpdateDriver {
     @Override
     public Driver update(UUID id, Command command) {
         Driver driver = repository.findById(id).orElseThrow(() -> new DriverNotFoundException(id));
-        driver.update(command.fullName(), command.email(), command.phone(), OffsetDateTime.now(clock));
+        String phone = command.phonePresent() ? command.phone() : driver.getPhone();
+        driver.update(command.fullName(), command.email(), phone, OffsetDateTime.now(clock));
         repository.save(driver);
         return driver;
     }
