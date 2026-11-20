@@ -40,7 +40,13 @@ public class OpenApiConfig {
                                 Permisos: FLEET_ADMIN puede usar todas las rutas de conductores; DRIVER \
                                 solo GET /drivers/{id} con su propio id (custom:driver_id); los demás \
                                 grupos no tienen acceso. Las llamadas internas de otros microservicios \
-                                llegan directas a la EC2, sin JWT, y no pasan por el authorizer."""))
+                                llegan directas a la EC2, sin JWT, y no pasan por el authorizer.
+
+                                Trazabilidad: todas las rutas aceptan el encabezado opcional \
+                                X-Correlation-Id (UUID). Si no llega o no es un UUID válido, el \
+                                servicio genera uno. Siempre se devuelve en el encabezado \
+                                X-Correlation-Id de la respuesta, también en los errores, y aparece \
+                                en los logs y en los eventos publicados."""))
                 .components(new Components().addSecuritySchemes(BEARER_AUTH,
                         new SecurityScheme()
                                 .type(SecurityScheme.Type.HTTP)
