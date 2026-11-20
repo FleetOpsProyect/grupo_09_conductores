@@ -567,6 +567,78 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
     
     @Test
+    void updateWithoutPhoneKeyKeepsTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"nuevo@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("phone").asText()).isEqualTo("3001234567");
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").asText()).isEqualTo("3001234567");
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateWithNullPhoneErasesTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com","phone":null}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("phone").isNull()).isTrue();
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").isNull()).isTrue();
+    }
+
+    @Test
+    void updateWithPhoneValueReplacesTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com","phone":"3159876543"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").asText()).isEqualTo("3159876543");
+    }
+
+    @Test
+    void updateWithInvalidPhoneReturnsInvalidFormatAndKeepsTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com","phone":"2001234567"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody())))
+                .containsExactlyEntriesOf(Map.of("phone", "INVALID_FORMAT"));
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").asText()).isEqualTo("3001234567");
+    }
+
+    @Test
+    void updateWithoutRequiredFieldsReturnsRequiredForEachOne() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"phone":"3001234567"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(fieldCodes(body)).containsExactlyInAnyOrderEntriesOf(
+                Map.of("full_name", "REQUIRED", "email", "REQUIRED"));
+    }
+
+    @Test
     void getDriverMakesNoOutboundCallsAndReturnsNoLicenseData() throws Exception {
         AtomicInteger outboundCalls = new AtomicInteger();
         HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
