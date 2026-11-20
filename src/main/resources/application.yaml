@@ -23,6 +23,9 @@ logging:
   structured:
     format:
       console: ecs
+    json:
+      # Enmascara emails y teléfonos en cualquier campo de texto del log.
+      customizer: co.edu.univalle.conductores.config.logging.ContactDataMaskingCustomizer
 
 app:
   firebase:
