@@ -3,6 +3,9 @@ spring:
     import: optional:file:.env[.properties]
   application:
     name: ms-conductores
+  main:
+    # Sin banner, para que la salida estándar sea solo JSON (TEC_03).
+    banner-mode: off
   jackson:
     property-naming-strategy: SNAKE_CASE
   cloud:
@@ -12,6 +15,14 @@ spring:
 
 server:
   port: ${SERVER_PORT}
+
+logging:
+  # Logs en JSON con el esquema ECS de Spring Boot (TEC_03), más el contexto (MDC) como campos propios:
+  # correlation_id, http_method y http_path en las peticiones HTTP; event_id, event_type y correlation_id
+  # en los eventos consumidos y publicados.
+  structured:
+    format:
+      console: ecs
 
 app:
   firebase:
