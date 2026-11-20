@@ -84,6 +84,24 @@ class DriverEventListenerTest {
     }
 
     @Test
+    void logContextCarriesEventIdTypeAndCorrelationIdWhileProcessingAndIsClearedAfter() {
+        java.util.Map<String, String> seen = new java.util.HashMap<>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            seen.putAll(org.slf4j.MDC.getCopyOfContextMap());
+            return null;
+        }).when(processDriverEvent).process(any());
+
+        listener.onMessage(validEnvelope().toString(), "1");
+
+        assertThat(seen)
+                .containsEntry("event_id", EVENT_ID.toString())
+                .containsEntry("event_type", EXPIRED)
+                .containsEntry("correlation_id", CORRELATION_ID.toString());
+        assertThat(org.slf4j.MDC.get("event_id")).isNull();
+        assertThat(org.slf4j.MDC.get("correlation_id")).isNull();
+    }
+
+    @Test
     void processesValidEnvelope() {
         listener.onMessage(validEnvelope().toString(), "1");
 

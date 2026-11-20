@@ -1,11 +1,14 @@
 package co.edu.univalle.conductores.application.service;
 
+import co.edu.univalle.conductores.application.event.EventEnvelope;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
+import co.edu.univalle.conductores.application.logging.LogContext;
 import co.edu.univalle.conductores.application.port.out.EventMetricsPort;
 import co.edu.univalle.conductores.application.port.out.EventPublisherPort;
 import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Publica los eventos pendientes del outbox y actualiza su estado de entrega.
@@ -42,18 +45,31 @@ public class OutboxPublisher {
     public void publishPending(int limit) {
         eventMetrics.setPendingEvents(outboxRepository.countPending());
         for (OutboxEvent event : outboxRepository.findPending(limit)) {
+            EventEnvelope envelope = event.envelope();
+            MDC.put(LogContext.EVENT_ID, String.valueOf(envelope.eventId()));
+            MDC.put(LogContext.EVENT_TYPE, envelope.eventType());
+            MDC.put(LogContext.CORRELATION_ID, String.valueOf(envelope.correlationId()));
             try {
-                eventPublisher.publish(event.envelope());
-            } catch (RuntimeException ex) {
-                eventMetrics.recordPublicationFailure(event.envelope().eventType());
-                outboxRepository.recordPublishFailure(event.envelope().eventId());
-                LOGGER.warn("SNS publication failed for event {} ({})",
-                        event.envelope().eventId(), event.envelope().eventType(), ex);
-                continue;
+                publish(envelope);
+            } finally {
+                MDC.remove(LogContext.EVENT_ID);
+                MDC.remove(LogContext.EVENT_TYPE);
+                MDC.remove(LogContext.CORRELATION_ID);
             }
-            outboxRepository.markAsSent(event.envelope().eventId());
-            eventMetrics.recordPublished(event.envelope().eventType());
         }
         eventMetrics.setPendingEvents(outboxRepository.countPending());
+    }
+
+    private void publish(EventEnvelope envelope) {
+        try {
+            eventPublisher.publish(envelope);
+        } catch (RuntimeException ex) {
+            eventMetrics.recordPublicationFailure(envelope.eventType());
+            outboxRepository.recordPublishFailure(envelope.eventId());
+            LOGGER.warn("SNS publication failed for event {} ({})", envelope.eventId(), envelope.eventType(), ex);
+            return;
+        }
+        outboxRepository.markAsSent(envelope.eventId());
+        eventMetrics.recordPublished(envelope.eventType());
     }
 }
