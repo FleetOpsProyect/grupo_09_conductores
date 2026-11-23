@@ -686,6 +686,47 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void updateOfInactiveDriverKeepsItsStatus() throws Exception {
+        OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS);
+        UUID id = saveInactiveDriverCreatedAt(createdAt);
+
+        ResponseEntity<String> response = put(id.toString(), """
+                {"full_name":"Carlos A. Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("status").asText()).isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateUnknownDriverReturns404AndCreatesNothing() throws Exception {
+        UUID id = UUID.randomUUID();
+
+        ResponseEntity<String> response = put(id.toString(), """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertDriverNotFound(response, id.toString());
+        assertThat(firestore.collection("drivers").document(id.toString()).get().get().exists()).isFalse();
+    }
+
+    @Test
+    void updateWithSeveralInvalidFieldsReportsAllOfThem() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Al","email":"sin-arroba","phone":"123"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody()))).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "full_name", "INVALID_LENGTH", "email", "INVALID_FORMAT", "phone", "INVALID_FORMAT"));
+    }
+
+    @Test
     void getDriverMakesNoOutboundCallsAndReturnsNoLicenseData() throws Exception {
         AtomicInteger outboundCalls = new AtomicInteger();
         HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
