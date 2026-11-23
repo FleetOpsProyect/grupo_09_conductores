@@ -4,7 +4,8 @@ package co.edu.univalle.conductores.application.event;
  * Tipos de eventos publicados por Conductores.
  */
 public enum DriverEventType {
-    DRIVER_ACTIVATED("driver_activated_event");
+    DRIVER_ACTIVATED("driver_activated_event"),
+    DRIVER_UPDATED("driver_updated_event");
 
     private final String value;
 

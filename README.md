@@ -115,7 +115,7 @@ Nota: se fija `localstack/localstack:4.14.0` (última imagen Community); el tag 
 | `POST` | `/drivers` | Registra un conductor. Responde `201`, `400`, `409` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `GET` | `/drivers/{id}` | Consulta un conductor por UUID. Responde `200`, `404` (también `404` si el id no es un UUID) o `503` (y `401`/`403` desde API Gateway). `FLEET_ADMIN` cualquier id; `DRIVER` solo el suyo (HU-03). |
 | `GET` | `/drivers` | Lista conductores con filtros opcionales `status`, `page` y `size` (`size` entre 1 y 100). Responde `200`, `400` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
-| `PUT` | `/drivers/{id}` | Actualiza `full_name`, `email` y `phone`. Responde `200`, `400`, `404` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
+| `PUT` | `/drivers/{id}` | Actualiza `full_name` y `email` (obligatorios) y `phone`: sin la clave se mantiene, con `null` se borra, con un valor se reemplaza. `document_number` no es editable (`400` con `NOT_EDITABLE` si llega con otro valor) y `status` se ignora. Si algo cambia, guarda `driver_updated_event` en el outbox. Responde `200`, `400`, `404` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `POST` | `/drivers/{id}/medical-release` | Registra el alta médica de un conductor (HU-10). Responde `200`, `400`, `404`, `409` o `503` (y `401`/`403` desde API Gateway). Solo `FLEET_ADMIN`. |
 | `GET` | `/health` | Salud del servicio y de Firestore. Responde `200` o `503`. Puerto de gestión (`18001`). |
 | `GET` | `/metrics` | Métricas en formato Prometheus. Puerto de gestión (`18001`). |
@@ -197,7 +197,8 @@ En `/metrics`, las métricas de eventos son:
 
 ### Publicador del outbox
 
-El registro de un conductor (y el alta médica) guarda el evento en `outbox_events` en la misma
+El registro de un conductor, el alta médica y la modificación de sus datos (`driver_updated_event`, solo si
+algún campo cambia) guardan el evento en `outbox_events` en la misma
 transacción de Firestore, con estado `PENDING`, y responde sin esperar a SNS. Un proceso programado,
 cada `OUTBOX_PUBLISH_INTERVAL_MS` (2 s), lee hasta `OUTBOX_BATCH_SIZE` eventos `PENDING` en orden de
 `created_at`, los publica en `fleetops_driver_events` con el message attribute `event_type` y los marca
@@ -736,6 +737,3 @@ Se asignó una Elastic IP a la instancia para que la dirección no cambie al rei
 - `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda
   `created_at`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- `PUT /drivers/{id}` no acepta `document_number`, así que no responde
-  `400 NOT_EDITABLE` cuando llega con un valor distinto (HU-08, criterio 2); por eso tampoco
-  aparece en la especificación OpenAPI.

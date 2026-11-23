@@ -22,6 +22,7 @@ import com.google.cloud.firestore.FieldValue;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QuerySnapshot;
+import com.google.cloud.firestore.SetOptions;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -221,6 +222,26 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
     @Override
     public void save(Driver driver) {
         await(drivers().document(driver.getId().toString()).set(DriverDocument.fromDomain(driver)));
+    }
+
+    /**
+     * Updates the driver with a merge, so fields outside {@link DriverDocument#fromDomain(Driver)} such as
+     * medical_release_notes survive, and stores the outbox event in the same transaction.
+     *
+     * @param driver driver with the new data
+     * @param outboxEvent driver_updated_event to store in outbox_events
+     */
+    @Override
+    public void updateWithOutbox(Driver driver, OutboxEvent outboxEvent) {
+        DocumentReference driverRef = drivers().document(driver.getId().toString());
+        DocumentReference outboxRef = firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(outboxEvent.envelope().eventId().toString());
+
+        await(firestore.runTransaction(transaction -> {
+            transaction.set(driverRef, DriverDocument.fromDomain(driver), SetOptions.merge());
+            transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
+            return null;
+        }));
     }
 
     @Override

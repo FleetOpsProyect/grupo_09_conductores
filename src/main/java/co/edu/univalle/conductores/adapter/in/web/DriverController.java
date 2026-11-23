@@ -221,14 +221,20 @@ public class DriverController {
      * then an id that is not a canonical UUID responds 404 DRIVER_NOT_FOUND.
      *
      * @param id driver id as received in the path
+     * @param correlationId correlation_id resolved by {@link CorrelationIdFilter}
      * @param request new data
      * @return updated driver
      */
     @Operation(summary = "Modificar los datos de un conductor (HU-08)",
         description = """
-            Reemplaza los campos editables (full_name, email y phone) con las mismas reglas del \
-            registro. El cuerpo debe traer todos los campos obligatorios. El status del conductor \
-            no cambia.
+            Modifica los campos editables (full_name, email y phone) con las mismas reglas del \
+            registro. El cuerpo debe traer los obligatorios, full_name y email; si falta uno, \
+            responde 400 con REQUIRED para ese campo. phone es opcional: si la clave no llega, se \
+            mantiene el teléfono guardado; si llega "phone": null, se borra; si llega un valor, se \
+            reemplaza. document_number no es editable: puede llegar con el valor guardado, pero \
+            con otro valor responde 400. El status del conductor no cambia y, si llega en el \
+            cuerpo, se ignora. Si al menos un campo cambia, se guarda driver_updated_event en el \
+            outbox en la misma transacción; si nada cambia, no se genera evento.
 
             """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
@@ -236,7 +242,9 @@ public class DriverController {
         @ApiResponse(responseCode = "400",
             description = """
                 INVALID_DATA: uno o más campos no cumplen su regla (REQUIRED si falta un campo \
-                obligatorio); errors trae un elemento por cada campo inválido. INVALID_JSON: el \
+                obligatorio); errors trae un elemento por cada campo inválido. Si el resto del \
+                cuerpo es válido y document_number llega con un valor distinto al guardado, errors \
+                trae {"field": "document_number", "code": "NOT_EDITABLE"}. INVALID_JSON: el \
                 cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
@@ -253,9 +261,12 @@ public class DriverController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PutMapping("/{id}")
-    public DriverResponse update(@PathVariable String id, @Valid @RequestBody UpdateDriverRequest request) {
+    public DriverResponse update(@PathVariable String id,
+            @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) UUID correlationId,
+            @Valid @RequestBody UpdateDriverRequest request) {
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
-                request.fullName(), request.email(), request.phone()));
+                request.getFullName(), request.getEmail(), request.isPhonePresent(), request.getPhone(),
+                request.getDocumentNumber(), correlationId));
         return DriverResponse.from(driver);
     }
 

@@ -567,6 +567,239 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
     
     @Test
+    void updateWithoutPhoneKeyKeepsTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"nuevo@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("phone").asText()).isEqualTo("3001234567");
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").asText()).isEqualTo("3001234567");
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateWithNullPhoneErasesTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com","phone":null}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("phone").isNull()).isTrue();
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").isNull()).isTrue();
+    }
+
+    @Test
+    void updateWithPhoneValueReplacesTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com","phone":"3159876543"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").asText()).isEqualTo("3159876543");
+    }
+
+    @Test
+    void updateWithInvalidPhoneReturnsInvalidFormatAndKeepsTheStoredPhone() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com","phone":"2001234567"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody())))
+                .containsExactlyEntriesOf(Map.of("phone", "INVALID_FORMAT"));
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("phone").asText()).isEqualTo("3001234567");
+    }
+
+    @Test
+    void updateWithoutRequiredFieldsReturnsRequiredForEachOne() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"phone":"3001234567"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(fieldCodes(body)).containsExactlyInAnyOrderEntriesOf(
+                Map.of("full_name", "REQUIRED", "email", "REQUIRED"));
+    }
+
+    @Test
+    void updateWithDifferentDocumentNumberReturnsNotEditableAndChangesNothing() throws Exception {
+        String document = uniqueDocument();
+        String id = MAPPER.readTree(register(document).getBody()).get("id").asText();
+        String other = document.equals("0000000001") ? "0000000002" : "0000000001";
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"nuevo@correo.com","document_number":"%s"}
+                """.formatted(other));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(fieldCodes(body)).containsExactlyEntriesOf(Map.of("document_number", "NOT_EDITABLE"));
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("document_number").asText()).isEqualTo(document);
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos Pérez");
+        assertThat(outboxEvents(id, "driver_updated_event")).isEmpty();
+    }
+
+    @Test
+    void updateWithSameDocumentNumberIsAccepted() throws Exception {
+        String document = uniqueDocument();
+        String id = MAPPER.readTree(register(document).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"carlos@correo.com","document_number":"%s"}
+                """.formatted(document));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateIgnoresStatusAndKeepsTheStoredOne() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"nuevo@correo.com","status":"MEDICAL_HOLD_INCIDENT"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("status").asText()).isEqualTo("ACTIVE");
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+        assertThat(stored.get("email").asText()).isEqualTo("nuevo@correo.com");
+    }
+
+    @Test
+    void updateOfInactiveDriverKeepsItsStatus() throws Exception {
+        OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS);
+        UUID id = saveInactiveDriverCreatedAt(createdAt);
+
+        ResponseEntity<String> response = put(id.toString(), """
+                {"full_name":"Carlos A. Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("status").asText()).isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateUnknownDriverReturns404AndCreatesNothing() throws Exception {
+        UUID id = UUID.randomUUID();
+
+        ResponseEntity<String> response = put(id.toString(), """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertDriverNotFound(response, id.toString());
+        assertThat(firestore.collection("drivers").document(id.toString()).get().get().exists()).isFalse();
+        assertThat(outboxEvents(id.toString(), "driver_updated_event")).isEmpty();
+    }
+
+    @Test
+    void updateWithSeveralInvalidFieldsReportsAllOfThem() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Al","email":"sin-arroba","phone":"123"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody()))).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "full_name", "INVALID_LENGTH", "email", "INVALID_FORMAT", "phone", "INVALID_FORMAT"));
+    }
+
+    @Test
+    void updateWritesDriverUpdatedEventWithTheNewNameAndCorrelationId() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+        UUID correlationId = UUID.randomUUID();
+
+        ResponseEntity<String> response = client().put().uri("/{id}", id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("X-Correlation-Id", correlationId.toString())
+                .body("""
+                        {"full_name":"Carlos A. Pérez","email":"carlos@correo.com"}
+                        """)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var events = outboxEvents(id, "driver_updated_event");
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getString("status")).isIn("PENDING", "SENT");
+        JsonNode payload = MAPPER.readTree(events.get(0).getString("payload"));
+        assertThat(payload.get("correlation_id").asText()).isEqualTo(correlationId.toString());
+        assertThat(payload.get("data").get("driver_id").asText()).isEqualTo(id);
+        assertThat(payload.get("data").get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateWithoutChangesWritesNoEventAndKeepsUpdatedAt() throws Exception {
+        JsonNode registered = MAPPER.readTree(register(uniqueDocument()).getBody());
+        String id = registered.get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("updated_at").asText())
+                .isEqualTo(registered.get("updated_at").asText());
+        assertThat(outboxEvents(id, "driver_updated_event")).isEmpty();
+    }
+
+    @Test
+    void updateMakesNoOutboundCallsToDocumentacion() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+            ResponseEntity<String> response = put(id, """
+                    {"full_name":"Carlos A. Pérez","email":"carlos@correo.com"}
+                    """);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(outboundCalls.get()).isZero();
+        } finally {
+            simulatedExternalService.stop(0);
+        }
+    }
+
+    private List<com.google.cloud.firestore.QueryDocumentSnapshot> outboxEvents(String driverId, String type)
+            throws Exception {
+        return firestore.collection("outbox_events").get().get().getDocuments().stream()
+                .filter(event -> type.equals(event.getString("event_type")))
+                .filter(event -> String.valueOf(event.getString("payload")).contains(driverId))
+                .toList();
+    }
+
+    @Test
     void getDriverMakesNoOutboundCallsAndReturnsNoLicenseData() throws Exception {
         AtomicInteger outboundCalls = new AtomicInteger();
         HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
