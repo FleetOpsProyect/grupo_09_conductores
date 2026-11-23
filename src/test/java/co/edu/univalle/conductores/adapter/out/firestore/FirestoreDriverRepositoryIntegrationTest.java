@@ -129,7 +129,8 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
         OutboxEvent outboxEvent = createDriverWithOutbox(driver);
         UUID eventId = outboxEvent.envelope().eventId();
 
-        assertThat(outboxRepository.findPending(10))
+        // Other tests leave pending events with the same created_at, so read every pending event, not a page.
+        assertThat(outboxRepository.findPending(Math.toIntExact(pendingBefore) + 1))
                 .extracting(event -> event.envelope().eventId())
                 .contains(eventId);
         assertThat(outboxRepository.countPending()).isEqualTo(pendingBefore + 1);
