@@ -30,6 +30,15 @@ public interface DriverRepository {
     void save(Driver driver);
 
     /**
+     * Actualiza los datos editables de un conductor y registra el evento del outbox en una sola
+     * transacción. Los campos que el dominio no conoce, como las notas del alta médica, se conservan.
+     *
+     * @param driver conductor con los datos nuevos
+     * @param outboxEvent evento driver_updated_event a guardar en outbox_events
+     */
+    void updateWithOutbox(Driver driver, OutboxEvent outboxEvent);
+
+    /**
      * Busca un conductor por su id.
      *
      * @param id identificador del conductor

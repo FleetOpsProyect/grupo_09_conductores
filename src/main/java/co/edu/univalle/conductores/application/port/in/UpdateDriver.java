@@ -27,8 +27,10 @@ public interface UpdateDriver {
      * @param phonePresent true si la petición trae phone; false para mantener el teléfono guardado
      * @param phone teléfono nuevo, o null para borrarlo; se ignora si phonePresent es false
      * @param documentNumber número de documento recibido, o null si no llegó; solo se compara con el guardado
+     * @param correlationId identificador de correlación para el evento driver_updated_event
      */
-    record Command(String fullName, String email, boolean phonePresent, String phone, String documentNumber) {
+    record Command(String fullName, String email, boolean phonePresent, String phone, String documentNumber,
+            UUID correlationId) {
 
         /**
          * Reemplaza el teléfono por el valor dado; null lo borra.
@@ -38,7 +40,7 @@ public interface UpdateDriver {
          * @param phone teléfono nuevo, o null para borrarlo
          */
         public Command(String fullName, String email, String phone) {
-            this(fullName, email, true, phone, null);
+            this(fullName, email, true, phone, null, null);
         }
 
         /**
@@ -49,7 +51,7 @@ public interface UpdateDriver {
          * @return comando que no toca el teléfono
          */
         public static Command keepingPhone(String fullName, String email) {
-            return new Command(fullName, email, false, null, null);
+            return new Command(fullName, email, false, null, null, null);
         }
     }
 }

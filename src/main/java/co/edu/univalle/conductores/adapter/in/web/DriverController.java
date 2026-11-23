@@ -221,6 +221,7 @@ public class DriverController {
      * then an id that is not a canonical UUID responds 404 DRIVER_NOT_FOUND.
      *
      * @param id driver id as received in the path
+     * @param correlationId correlation_id resolved by {@link CorrelationIdFilter}
      * @param request new data
      * @return updated driver
      */
@@ -232,7 +233,8 @@ public class DriverController {
             mantiene el teléfono guardado; si llega "phone": null, se borra; si llega un valor, se \
             reemplaza. document_number no es editable: puede llegar con el valor guardado, pero \
             con otro valor responde 400. El status del conductor no cambia y, si llega en el \
-            cuerpo, se ignora.
+            cuerpo, se ignora. Si al menos un campo cambia, se guarda driver_updated_event en el \
+            outbox en la misma transacción; si nada cambia, no se genera evento.
 
             """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
@@ -259,10 +261,12 @@ public class DriverController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PutMapping("/{id}")
-    public DriverResponse update(@PathVariable String id, @Valid @RequestBody UpdateDriverRequest request) {
+    public DriverResponse update(@PathVariable String id,
+            @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) UUID correlationId,
+            @Valid @RequestBody UpdateDriverRequest request) {
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
                 request.getFullName(), request.getEmail(), request.isPhonePresent(), request.getPhone(),
-                request.getDocumentNumber()));
+                request.getDocumentNumber(), correlationId));
         return DriverResponse.from(driver);
     }
 
