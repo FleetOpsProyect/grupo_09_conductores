@@ -639,6 +639,53 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void updateWithDifferentDocumentNumberReturnsNotEditableAndChangesNothing() throws Exception {
+        String document = uniqueDocument();
+        String id = MAPPER.readTree(register(document).getBody()).get("id").asText();
+        String other = document.equals("0000000001") ? "0000000002" : "0000000001";
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"nuevo@correo.com","document_number":"%s"}
+                """.formatted(other));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(fieldCodes(body)).containsExactlyEntriesOf(Map.of("document_number", "NOT_EDITABLE"));
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("document_number").asText()).isEqualTo(document);
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos Pérez");
+    }
+
+    @Test
+    void updateWithSameDocumentNumberIsAccepted() throws Exception {
+        String document = uniqueDocument();
+        String id = MAPPER.readTree(register(document).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"carlos@correo.com","document_number":"%s"}
+                """.formatted(document));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateIgnoresStatusAndKeepsTheStoredOne() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"nuevo@correo.com","status":"MEDICAL_HOLD_INCIDENT"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
+        assertThat(stored.get("status").asText()).isEqualTo("ACTIVE");
+        assertThat(stored.get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+        assertThat(stored.get("email").asText()).isEqualTo("nuevo@correo.com");
+    }
+
+    @Test
     void getDriverMakesNoOutboundCallsAndReturnsNoLicenseData() throws Exception {
         AtomicInteger outboundCalls = new AtomicInteger();
         HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);

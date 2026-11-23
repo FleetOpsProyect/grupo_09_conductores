@@ -5,12 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
+import co.edu.univalle.conductores.domain.FieldNotEditableException;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import java.time.Clock;
 import java.time.Instant;
@@ -76,6 +78,32 @@ class UpdateDriverServiceTest {
                 .update(driver.getId(), new UpdateDriver.Command("Carlos Pérez", "carlos@correo.com", "3159876543"));
 
         assertThat(result.getPhone()).isEqualTo("3159876543");
+    }
+
+    @Test
+    void differentDocumentNumberIsRejectedAndNothingIsSaved() {
+        Driver driver = driverWithPhone(null);
+        UpdateDriver.Command command = new UpdateDriver.Command(
+                "Carlos A. Pérez", "carlos@correo.com", false, null, "999999");
+
+        assertThatThrownBy(() -> new UpdateDriverService(repository, CLOCK).update(driver.getId(), command))
+                .isInstanceOfSatisfying(FieldNotEditableException.class,
+                        ex -> assertThat(ex.getField()).isEqualTo("document_number"));
+        assertThat(driver.getFullName()).isEqualTo("Carlos Pérez");
+        verify(repository).findById(driver.getId());
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void sameDocumentNumberIsAccepted() {
+        Driver driver = driverWithPhone(null);
+        UpdateDriver.Command command = new UpdateDriver.Command(
+                "Carlos A. Pérez", "carlos@correo.com", false, null, " 1144056789 ");
+
+        Driver result = new UpdateDriverService(repository, CLOCK).update(driver.getId(), command);
+
+        assertThat(result.getFullName()).isEqualTo("Carlos A. Pérez");
+        assertThat(result.getDocumentNumber()).isEqualTo("1144056789");
     }
 
     private Driver driverWithPhone(String phone) {
