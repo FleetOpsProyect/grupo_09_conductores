@@ -39,6 +39,7 @@ Toda la configuración llega por variables de entorno (DEV_04). La columna **Loc
 | `GOOGLE_APPLICATION_CREDENTIALS` | Ruta, dentro del contenedor, al JSON de la cuenta de servicio de Firebase. | sin definir (emulador) | `/secrets/firebase-adminsdk.json` | Implementada |
 | `FIREBASE_CREDENTIALS_PATH` | Ruta en el host (EC2) al JSON de Firebase que se monta como volumen de solo lectura. | — | `/home/ec2-user/credentials/firebase-adminsdk.json` | Infra |
 | `FIRESTORE_TIMEOUT` | Espera máxima de cada llamada a Firestore y del chequeo de `/health` (formato Duration de Spring). | `2s` | `2s` | Implementada |
+| `LOG_FORMAT` | Formato del log en consola (TEC_03). Sin definir: JSON con esquema ECS. Vacía: texto plano, solo para desarrollo local (sin enmascarar datos de contacto). | sin definir (`ecs`); `LOG_FORMAT=` para texto plano | sin definir (`ecs`) | Implementada |
 | `AWS_REGION` | Región de AWS para SNS/SQS. | `us-east-1` | `us-east-1` | Implementada |
 | `AWS_ACCESS_KEY_ID` | Credencial para LocalStack. | `test` | sin definir (rol IAM de la EC2) | Implementada |
 | `AWS_SECRET_ACCESS_KEY` | Credencial para LocalStack. | `test` | sin definir (rol IAM de la EC2) | Implementada |
@@ -366,6 +367,47 @@ Los puertos no estándar siguen la recomendación de OWASP. Las métricas del se
 el puerto de gestión `18001`, no en el `8085` de la API: el `8085` puede ser público
 sin exponer las métricas.
 
+### Logs en JSON y correlation_id (TEC_03)
+
+El servicio escribe en la salida estándar un objeto JSON por línea con el esquema ECS (Elastic Common
+Schema) nativo de Spring Boot (`logging.structured.format.console` en `application.yaml`). La variable
+`LOG_FORMAT` elige el formato: sin definir usa `ecs`; vacía (`LOG_FORMAT=`) vuelve al texto plano de
+Spring Boot, pensado solo para desarrollo local. En producción no se define. Ejemplo de un error en una
+petición:
+
+```json
+{"@timestamp":"2026-11-20T15:15:02.114Z","log":{"level":"ERROR","logger":"co.edu.univalle.conductores.adapter.in.web.GlobalExceptionHandler"},
+ "process":{"pid":1,"thread":{"name":"http-nio-8085-exec-3"}},"service":{"name":"ms-conductores"},
+ "message":"Unexpected error on GET /drivers","correlation_id":"0f8fad5b-d9cb-469f-a165-70867728950e",
+ "http_method":"GET","http_path":"/drivers",
+ "error":{"type":"java.lang.RuntimeException","message":"...","stack_trace":"java.lang.RuntimeException: ..."},
+ "ecs":{"version":"8.11"}}
+```
+
+| Origen | Campos de contexto |
+| :--- | :--- |
+| Petición HTTP | `correlation_id`, `http_method`, `http_path` |
+| Evento consumido de `fleetops_driver_queue` | `correlation_id`, `event_id`, `event_type` (los del sobre) |
+| Evento publicado por el outbox | `correlation_id`, `event_id`, `event_type` |
+
+- **correlation_id en HTTP:** `CorrelationIdFilter` lo toma del encabezado `X-Correlation-Id` si es un
+  UUID y lo genera si no llega o no es válido. Se devuelve en el encabezado `X-Correlation-Id` de todas
+  las respuestas, también en los errores, y es el mismo que se guarda en los eventos del outbox.
+- **Llamadas a Documentación:** `CorrelationIdClientInterceptor` añade `X-Correlation-Id` con el
+  correlation_id de la operación en curso. El cliente de HU-07 debe registrarlo con
+  `RestClient.builder().requestInterceptor(interceptor)`.
+- **Sin datos de contacto completos:** `ContactDataMaskingCustomizer` enmascara cualquier email
+  (`c***@correo.com`) y teléfono móvil de 10 dígitos (`******4567`) en todos los campos del JSON, incluidos
+  `error.message` y `error.stack_trace`, aunque el código los incluya por error. No toca UUIDs, números de
+  documento ni fechas. En texto plano (`LOG_FORMAT=`) no se enmascara: no lo uses en producción.
+- Para un log nuevo con contexto propio, usa las claves de `LogContext` (`application/logging`).
+
+Para leer los logs en la EC2 de forma legible:
+
+```bash
+docker compose -f docker-compose.prod.yml logs --no-log-prefix backend | jq -R "fromjson? // empty" | jq -r '[.["@timestamp"], .log.level, .correlation_id, .message] | @tsv'
+```
+
 ### Security group
 
 Los puertos de métricas nunca se abren a `0.0.0.0/0`. En el security group de la EC2, añade una regla
@@ -509,8 +551,9 @@ El workflow `.github/workflows/cd.yml` se dispara con un push/merge a `main` (o 
    `--remove-orphans` elimina los contenedores de servicios que ya no están en el compose (por
    ejemplo, el Prometheus y el Grafana de la configuración anterior, que ahora corren en local).
    Después comprueba que el `19100` publica CPU y disco, que el `18080` publica CPU por contenedor y
-   que el `18001` publica métricas HTTP. Un fallo marca el workflow como fallido, pero no revierte un
-   backend que ya quedó saludable.
+   que el `18001` publica métricas del servicio (`process_uptime_seconds`; las métricas HTTP solo
+   aparecen después de la primera petición a la API). Un fallo marca el workflow como fallido, pero
+   no revierte un backend que ya quedó saludable.
 
 Secretos de GitHub necesarios:
 
@@ -693,7 +736,6 @@ Se asignó una Elastic IP a la instancia para que la dirección no cambie al rei
 - `document_number` no se recorta antes de validar/guardar y `document_numbers` no guarda
   `created_at`.
 - Las fechas se guardan en Firestore como texto ISO 8601, no como timestamps nativos.
-- No hay logs estructurados JSON por ahora (TEC_03).
 - `PUT /drivers/{id}` no acepta `document_number`, así que no responde
   `400 NOT_EDITABLE` cuando llega con un valor distinto (HU-08, criterio 2); por eso tampoco
   aparece en la especificación OpenAPI.

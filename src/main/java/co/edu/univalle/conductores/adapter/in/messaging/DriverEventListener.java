@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.adapter.in.messaging;
 
+import co.edu.univalle.conductores.application.logging.LogContext;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.Command;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
@@ -12,6 +13,7 @@ import java.time.format.DateTimeParseException;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
@@ -78,6 +80,9 @@ public class DriverEventListener {
             JsonNode root = unwrapSnsNotification(parseJson(payload));
             eventType = textOrUnknown(root, "event_type");
             eventId = textOrUnknown(root, "event_id");
+            MDC.put(LogContext.EVENT_ID, eventId);
+            MDC.put(LogContext.EVENT_TYPE, eventType);
+            MDC.put(LogContext.CORRELATION_ID, textOrUnknown(root, "correlation_id"));
 
             processDriverEvent.process(toCommand(root));
 
@@ -99,6 +104,10 @@ public class DriverEventListener {
                 consumerMetrics.recordDlq(eventType, "max_retries");
             }
             throw ex;
+        } finally {
+            MDC.remove(LogContext.EVENT_ID);
+            MDC.remove(LogContext.EVENT_TYPE);
+            MDC.remove(LogContext.CORRELATION_ID);
         }
     }
 

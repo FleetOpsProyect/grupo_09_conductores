@@ -164,7 +164,9 @@ class GlobalExceptionHandlerWebTest {
                 .contains("ERROR")
                 .contains("Unexpected error on GET /drivers")
                 .contains("java.lang.RuntimeException: secret detail")
-                .contains("\tat ");
+                // ECS JSON log (TEC_03): the stack trace goes escaped in error.stack_trace.
+                .contains("\"stack_trace\"")
+                .contains("\\tat ");
     }
 
     @Test

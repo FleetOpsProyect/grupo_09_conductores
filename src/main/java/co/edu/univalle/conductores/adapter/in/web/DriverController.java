@@ -34,7 +34,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -96,6 +96,7 @@ public class DriverController {
     /**
      * Registra un conductor.
      *
+     * @param correlationId correlation_id resuelto por {@link CorrelationIdFilter}
      * @param request datos del conductor
      * @return conductor creado con código 201
      */
@@ -125,15 +126,12 @@ public class DriverController {
     })
     @PostMapping
     public ResponseEntity<DriverResponse> register(
-            @RequestHeader(value = "X-Correlation-Id", required = false) String correlationIdHeader,
+            @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) UUID correlationId,
             @Valid @RequestBody RegisterDriverRequest request) {
-        UUID correlationId = resolveCorrelationId(correlationIdHeader);
         Driver driver = registerDriver.register(new RegisterDriver.Command(
                 request.fullName(), request.documentNumber(), request.email(), request.phone(), correlationId));
 
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .header("X-Correlation-Id", correlationId.toString())
-                .body(DriverResponse.from(driver));
+        return ResponseEntity.status(HttpStatus.CREATED).body(DriverResponse.from(driver));
     }
 
     /**
@@ -265,7 +263,7 @@ public class DriverController {
      * Registra el alta médica de un conductor.
      *
      * @param id identificador del conductor
-     * @param correlationIdHeader encabezado X-Correlation-Id opcional
+     * @param correlationId correlation_id resuelto por {@link CorrelationIdFilter}
      * @param request datos opcionales del alta médica
      * @return conductor actualizado con código 200
      */
@@ -302,15 +300,12 @@ public class DriverController {
     @PostMapping("/{id}/medical-release")
     public ResponseEntity<DriverResponse> releaseMedical(
             @PathVariable String id,
-            @RequestHeader(value = "X-Correlation-Id", required = false) String correlationIdHeader,
+            @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) UUID correlationId,
             @Valid @RequestBody(required = false) MedicalReleaseRequest request) {
-        UUID correlationId = resolveCorrelationId(correlationIdHeader);
         String notes = request != null ? request.notes() : null;
         Driver driver = releaseMedicalBlock.release(parseId(id),
                 new ReleaseMedicalBlock.Command(notes, correlationId));
-        return ResponseEntity.ok()
-                .header("X-Correlation-Id", correlationId.toString())
-                .body(DriverResponse.from(driver));
+        return ResponseEntity.ok(DriverResponse.from(driver));
     }
 
     /**
@@ -326,12 +321,5 @@ public class DriverController {
             throw new DriverNotFoundException(id);
         }
         return UUID.fromString(id);
-    }
-
-    private static UUID resolveCorrelationId(String correlationIdHeader) {
-        if (correlationIdHeader == null || !UUID_PATTERN.matcher(correlationIdHeader).matches()) {
-            return UUID.randomUUID();
-        }
-        return UUID.fromString(correlationIdHeader);
     }
 }
