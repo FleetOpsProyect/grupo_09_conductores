@@ -17,7 +17,10 @@ import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -27,6 +30,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,6 +52,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/drivers")
 public class DriverController {
+
+    private static final Logger log = LoggerFactory.getLogger(DriverController.class);
 
     /** Strict canonical UUID: 8-4-4-4-12 hexadecimal digits. */
     private static final Pattern UUID_PATTERN = Pattern.compile(
@@ -284,29 +291,75 @@ public class DriverController {
             Si el conductor no tiene bloqueo por documentos vencidos, queda en estado ACTIVE \
             y se genera el evento driver_activated_event. Si tiene bloqueo por documentos \
             vencidos, queda en estado INACTIVE_EXPIRED_DOCUMENTS y no se genera evento. \
-            El cuerpo es opcional y permite registrar notas médicas.
+            El cuerpo es opcional y permite registrar notas médicas de hasta 500 caracteres.
 
-            """ + FLEET_ADMIN_ONLY)
+            """ + FLEET_ADMIN_ONLY,
+        parameters = {
+            @Parameter(name = "id", in = ParameterIn.PATH, required = true,
+                description = "Identificador del conductor (UUID canónico de 36 caracteres)",
+                schema = @Schema(type = "string", format = "uuid")),
+            @Parameter(name = "X-Correlation-Id", in = ParameterIn.HEADER, required = false,
+                description = "Identificador de correlación opcional (UUID)",
+                schema = @Schema(type = "string", format = "uuid"))
+        })
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Alta médica registrada exitosamente"),
+        @ApiResponse(responseCode = "200", description = "Alta médica registrada exitosamente",
+            content = @Content(schema = @Schema(implementation = DriverResponse.class))),
         @ApiResponse(responseCode = "400",
             description = """
-                INVALID_DATA: las notas superan el límite permitido. \
+                INVALID_DATA: las notas superan el límite permitido (máximo 500 caracteres). \
+                errors trae {"field": "notes", "code": "INVALID_LENGTH"}. \
                 INVALID_JSON: el cuerpo no es un JSON válido.""",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = @ExampleObject(name = "INVALID_LENGTH",
+                    value = """
+                        {\
+                          "code": "INVALID_DATA",\
+                          "message": "Los datos del conductor no son válidos",\
+                          "timestamp": "2026-11-23T00:00:00-05:00",\
+                          "path": "/drivers/7b0e4a52-2f1c-4c55-9d3e-1a2b3c4d5e6f/medical-release",\
+                          "errors": [{"field": "notes", "code": "INVALID_LENGTH"}]\
+                        }"""))),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "404",
             description = "DRIVER_NOT_FOUND: no existe un conductor con ese id o el id no es un UUID válido",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = @ExampleObject(name = "DRIVER_NOT_FOUND",
+                    value = """
+                        {\
+                          "code": "DRIVER_NOT_FOUND",\
+                          "message": "No existe un conductor con id '7b0e4a52-2f1c-4c55-9d3e-1a2b3c4d5e6f'",\
+                          "timestamp": "2026-11-23T00:00:00-05:00",\
+                          "path": "/drivers/7b0e4a52-2f1c-4c55-9d3e-1a2b3c4d5e6f/medical-release",\
+                          "errors": []\
+                        }"""))),
         @ApiResponse(responseCode = "409",
-            description = "STATUS_NOT_ALLOWED: el conductor no tiene un bloqueo médico activo",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            description = "STATUS_NOT_ALLOWED: el conductor no está inhabilitado por incidente",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = @ExampleObject(name = "STATUS_NOT_ALLOWED",
+                    value = """
+                        {\
+                          "code": "STATUS_NOT_ALLOWED",\
+                          "message": "El conductor no está inhabilitado por incidente",\
+                          "timestamp": "2026-11-23T00:00:00-05:00",\
+                          "path": "/drivers/7b0e4a52-2f1c-4c55-9d3e-1a2b3c4d5e6f/medical-release",\
+                          "errors": []\
+                        }"""))),
         @ApiResponse(responseCode = "503",
             description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = @ExampleObject(name = "SERVICE_UNAVAILABLE",
+                    value = """
+                        {\
+                          "code": "SERVICE_UNAVAILABLE",\
+                          "message": "Servicio temporalmente no disponible, intente nuevamente",\
+                          "timestamp": "2026-11-23T00:00:00-05:00",\
+                          "path": "/drivers/7b0e4a52-2f1c-4c55-9d3e-1a2b3c4d5e6f/medical-release",\
+                          "errors": []\
+                        }""")))
     })
     @PostMapping("/{id}/medical-release")
     public ResponseEntity<DriverResponse> releaseMedical(
@@ -316,6 +369,7 @@ public class DriverController {
         String notes = request != null ? request.notes() : null;
         Driver driver = releaseMedicalBlock.release(parseId(id),
                 new ReleaseMedicalBlock.Command(notes, correlationId));
+        log.info("Alta médica registrada para el conductor {}", driver.getId());
         return ResponseEntity.ok(DriverResponse.from(driver));
     }
 

@@ -6,7 +6,8 @@ import java.util.regex.Pattern;
 import lombok.Getter;
 
 /**
- * Conductor: agregado raíz del microservicio. Su estado se calcula a partir de los bloqueos internos.
+ * Conductor: agregado raíz del microservicio. Su estado se calcula a partir de
+ * los bloqueos internos.
  */
 @Getter
 public class Driver {
@@ -40,13 +41,14 @@ public class Driver {
     }
 
     /**
-     * Registra un conductor nuevo. Nace sin bloqueos, así que su estado inicial es ACTIVE.
+     * Registra un conductor nuevo. Nace sin bloqueos, así que su estado inicial es
+     * ACTIVE.
      *
-     * @param fullName nombre completo
+     * @param fullName       nombre completo
      * @param documentNumber número de documento (solo dígitos)
-     * @param email correo electrónico
-     * @param phone teléfono opcional de 10 dígitos que empieza por 3
-     * @param now momento de registro
+     * @param email          correo electrónico
+     * @param phone          teléfono opcional de 10 dígitos que empieza por 3
+     * @param now            momento de registro
      * @return el conductor nuevo
      */
     public static Driver register(String fullName, String documentNumber, String email, String phone,
@@ -60,17 +62,18 @@ public class Driver {
     }
 
     /**
-     * Reconstruye un conductor desde su almacenamiento. Lo usa solo el adaptador de persistencia.
+     * Reconstruye un conductor desde su almacenamiento. Lo usa solo el adaptador de
+     * persistencia.
      *
-     * @param id identificador existente
+     * @param id             identificador existente
      * @param documentNumber número de documento
-     * @param fullName nombre completo
-     * @param email correo electrónico
-     * @param phone teléfono opcional
-     * @param documentBlock bloqueo por documentos vencidos
-     * @param medicalBlock bloqueo por incidente grave
-     * @param createdAt fecha de creación
-     * @param updatedAt fecha de última modificación
+     * @param fullName       nombre completo
+     * @param email          correo electrónico
+     * @param phone          teléfono opcional
+     * @param documentBlock  bloqueo por documentos vencidos
+     * @param medicalBlock   bloqueo por incidente grave
+     * @param createdAt      fecha de creación
+     * @param updatedAt      fecha de última modificación
      * @return el conductor reconstruido
      */
     public static Driver restore(UUID id, String documentNumber, String fullName, String email, String phone,
@@ -80,12 +83,13 @@ public class Driver {
     }
 
     /**
-     * Cambia solo los datos editables. El número de documento y el estado no cambian aquí.
+     * Cambia solo los datos editables. El número de documento y el estado no
+     * cambian aquí.
      *
      * @param fullName nombre completo
-     * @param email correo electrónico
-     * @param phone teléfono opcional
-     * @param now momento de la modificación
+     * @param email    correo electrónico
+     * @param phone    teléfono opcional
+     * @param now      momento de la modificación
      */
     public void update(String fullName, String email, String phone, OffsetDateTime now) {
         validateEditableFields(fullName, email, phone);
@@ -127,15 +131,17 @@ public class Driver {
 
     /**
      * Remueve el bloqueo médico cuando se registra el alta médica del conductor.
-     * Si el conductor no tiene un bloqueo médico activo, la operación no está permitida.
+     * Si el conductor no tiene un bloqueo médico activo, la operación no está
+     * permitida.
      * No modifica el bloqueo por documentos vencidos.
      *
      * @param now momento en que se registra el alta médica
-     * @throws StatusNotAllowedException si el conductor no tiene un bloqueo médico activo
+     * @throws StatusNotAllowedException si el conductor no tiene un bloqueo médico
+     *                                   activo
      */
     public void releaseMedicalBlock(OffsetDateTime now) {
         if (!this.medicalBlock) {
-            throw new StatusNotAllowedException("El conductor no tiene un bloqueo médico activo");
+            throw new StatusNotAllowedException("El conductor no está inhabilitado por incidente");
         }
         this.medicalBlock = false;
         this.updatedAt = now;
