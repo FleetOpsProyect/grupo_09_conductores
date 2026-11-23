@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
 import co.edu.univalle.conductores.application.event.DriverEventType;
+import co.edu.univalle.conductores.application.event.DriverUpdatedPayload;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
@@ -267,6 +268,43 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
                 .document(driver.getId().toString()).get().get();
         assertThat(doc.getString("medical_release_notes")).isNull();
         assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
+    }
+
+    @Test
+    void updateWithOutboxStoresNewDataAndEventAndKeepsMedicalReleaseFields() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        driver.applyMedicalBlock(NOW.plusHours(1));
+        repository.save(driver);
+        driver.releaseMedicalBlock(NOW.plusHours(2));
+        repository.saveMedicalRelease(driver, "Conductor recuperado", NOW.plusHours(2), null);
+
+        driver.update("Nombre Actualizado", "nuevo@correo.com", "3159876543", NOW.plusHours(3));
+        EventEnvelope<DriverUpdatedPayload> envelope = new EventEnvelope<>(
+                UUID.randomUUID(),
+                DriverEventType.DRIVER_UPDATED.value(),
+                NOW.plusHours(3),
+                "driver",
+                UUID.randomUUID(),
+                new DriverUpdatedPayload(driver.getId(), driver.getFullName()));
+        repository.updateWithOutbox(driver, OutboxEvent.pending(envelope));
+
+        Driver found = repository.findById(driver.getId()).orElseThrow();
+        assertThat(found.getFullName()).isEqualTo("Nombre Actualizado");
+        assertThat(found.getEmail()).isEqualTo("nuevo@correo.com");
+        assertThat(found.getPhone()).isEqualTo("3159876543");
+        assertThat(found.getStatus()).isEqualTo(DriverStatus.ACTIVE);
+
+        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
+                .document(driver.getId().toString()).get().get();
+        assertThat(doc.getString("medical_release_notes")).isEqualTo("Conductor recuperado");
+        assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
+
+        DocumentSnapshot outbox = firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(envelope.eventId().toString()).get().get();
+        assertThat(outbox.exists()).isTrue();
+        assertThat(outbox.getString(OutboxEventDocument.EVENT_TYPE))
+                .isEqualTo(DriverEventType.DRIVER_UPDATED.value());
     }
 
     private OutboxEvent createDriverWithOutbox(Driver driver) {

@@ -655,6 +655,7 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         JsonNode stored = MAPPER.readTree(client().get().uri("/{id}", id).retrieve().body(String.class));
         assertThat(stored.get("document_number").asText()).isEqualTo(document);
         assertThat(stored.get("full_name").asText()).isEqualTo("Carlos Pérez");
+        assertThat(outboxEvents(id, "driver_updated_event")).isEmpty();
     }
 
     @Test
@@ -711,6 +712,7 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertDriverNotFound(response, id.toString());
         assertThat(firestore.collection("drivers").document(id.toString()).get().get().exists()).isFalse();
+        assertThat(outboxEvents(id.toString(), "driver_updated_event")).isEmpty();
     }
 
     @Test
@@ -724,6 +726,77 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(fieldCodes(MAPPER.readTree(response.getBody()))).containsExactlyInAnyOrderEntriesOf(Map.of(
                 "full_name", "INVALID_LENGTH", "email", "INVALID_FORMAT", "phone", "INVALID_FORMAT"));
+    }
+
+    @Test
+    void updateWritesDriverUpdatedEventWithTheNewNameAndCorrelationId() throws Exception {
+        String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+        UUID correlationId = UUID.randomUUID();
+
+        ResponseEntity<String> response = client().put().uri("/{id}", id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("X-Correlation-Id", correlationId.toString())
+                .body("""
+                        {"full_name":"Carlos A. Pérez","email":"carlos@correo.com"}
+                        """)
+                .retrieve()
+                .toEntity(String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var events = outboxEvents(id, "driver_updated_event");
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getString("status")).isIn("PENDING", "SENT");
+        JsonNode payload = MAPPER.readTree(events.get(0).getString("payload"));
+        assertThat(payload.get("correlation_id").asText()).isEqualTo(correlationId.toString());
+        assertThat(payload.get("data").get("driver_id").asText()).isEqualTo(id);
+        assertThat(payload.get("data").get("full_name").asText()).isEqualTo("Carlos A. Pérez");
+    }
+
+    @Test
+    void updateWithoutChangesWritesNoEventAndKeepsUpdatedAt() throws Exception {
+        JsonNode registered = MAPPER.readTree(register(uniqueDocument()).getBody());
+        String id = registered.get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos Pérez","email":"carlos@correo.com"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(response.getBody()).get("updated_at").asText())
+                .isEqualTo(registered.get("updated_at").asText());
+        assertThat(outboxEvents(id, "driver_updated_event")).isEmpty();
+    }
+
+    @Test
+    void updateMakesNoOutboundCallsToDocumentacion() throws Exception {
+        AtomicInteger outboundCalls = new AtomicInteger();
+        HttpServer simulatedExternalService = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        simulatedExternalService.createContext("/", exchange -> {
+            outboundCalls.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        simulatedExternalService.start();
+        try {
+            String id = MAPPER.readTree(register(uniqueDocument()).getBody()).get("id").asText();
+
+            ResponseEntity<String> response = put(id, """
+                    {"full_name":"Carlos A. Pérez","email":"carlos@correo.com"}
+                    """);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(outboundCalls.get()).isZero();
+        } finally {
+            simulatedExternalService.stop(0);
+        }
+    }
+
+    private List<com.google.cloud.firestore.QueryDocumentSnapshot> outboxEvents(String driverId, String type)
+            throws Exception {
+        return firestore.collection("outbox_events").get().get().getDocuments().stream()
+                .filter(event -> type.equals(event.getString("event_type")))
+                .filter(event -> String.valueOf(event.getString("payload")).contains(driverId))
+                .toList();
     }
 
     @Test
