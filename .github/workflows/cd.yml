@@ -206,6 +206,8 @@ jobs:
             fi
 
             # check_metrics <url> <metric that must be present>
+            # For 18001 it checks process_uptime_seconds, which exists from startup. The HTTP metrics
+            # (http_server_requests_*) only appear after the first request to the API port (8085).
             check_metrics() {
               curl -fsS "$1" 2>/dev/null | grep -q "^$2"
             }
@@ -216,7 +218,7 @@ jobs:
               if check_metrics http://localhost:19100/metrics node_cpu_seconds_total \
                 && check_metrics http://localhost:19100/metrics node_filesystem_avail_bytes \
                 && check_metrics http://localhost:18080/metrics container_cpu_usage_seconds_total \
-                && { [ "$BACKEND_OK" -ne 1 ] || check_metrics http://localhost:18001/metrics http_server_requests_seconds_count; }; then
+                && { [ "$BACKEND_OK" -ne 1 ] || check_metrics http://localhost:18001/metrics process_uptime_seconds; }; then
                 METRICS_OK=1
                 break
               fi
