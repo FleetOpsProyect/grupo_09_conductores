@@ -7,7 +7,8 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
- * Request body to update a driver (HU-08). The document number is not editable.
+ * Request body to update a driver (HU-08). The document number is not editable, and status, if it
+ * arrives, is ignored like any other unknown field.
  *
  * <p>It is a class with setters, not a record, because phone has three cases that a record cannot tell
  * apart: Jackson calls {@link #setPhone(String)} when the key arrives, even with {@code null}, and does
@@ -35,8 +36,32 @@ public class UpdateDriverRequest {
             nullable = true)
     private String phone;
 
+    @Schema(description = """
+            No editable. Puede llegar con el valor guardado; si llega con otro valor, responde 400 \
+            INVALID_DATA con el código NOT_EDITABLE para este campo.""",
+            nullable = true)
+    private String documentNumber;
+
     @JsonIgnore
     private boolean phonePresent;
+
+    /**
+     * Returns the document number sent in the body, or null when it did not arrive.
+     *
+     * @return document number as received
+     */
+    public String getDocumentNumber() {
+        return documentNumber;
+    }
+
+    /**
+     * Sets the document number. It is only compared with the stored one; it is never changed.
+     *
+     * @param documentNumber document number as received
+     */
+    public void setDocumentNumber(String documentNumber) {
+        this.documentNumber = documentNumber;
+    }
 
     /**
      * Returns the full name, already trimmed.

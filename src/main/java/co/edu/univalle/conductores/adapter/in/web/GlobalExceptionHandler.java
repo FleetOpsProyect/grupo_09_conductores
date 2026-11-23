@@ -4,6 +4,7 @@ import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
+import co.edu.univalle.conductores.domain.FieldNotEditableException;
 import co.edu.univalle.conductores.domain.InvalidDriverException;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import co.edu.univalle.conductores.domain.StatusNotAllowedException;
@@ -97,6 +98,21 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidDriverException.class)
     public ResponseEntity<ErrorResponse> handleInvalidDriver(InvalidDriverException ex, HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST, "INVALID_DRIVER", ex.getMessage(), request, List.of());
+    }
+
+    /**
+     * Attempt to change a field that is not editable, such as document_number on PUT (HU-08):
+     * 400 INVALID_DATA with that field and code NOT_EDITABLE.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the field detail
+     */
+    @ExceptionHandler(FieldNotEditableException.class)
+    public ResponseEntity<ErrorResponse> handleFieldNotEditable(FieldNotEditableException ex,
+            HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Los datos del conductor no son válidos", request,
+                List.of(new FieldError(ex.getField(), ValidationErrorCodes.NOT_EDITABLE)));
     }
 
     /**

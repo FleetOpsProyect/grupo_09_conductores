@@ -230,7 +230,9 @@ public class DriverController {
             registro. El cuerpo debe traer los obligatorios, full_name y email; si falta uno, \
             responde 400 con REQUIRED para ese campo. phone es opcional: si la clave no llega, se \
             mantiene el teléfono guardado; si llega "phone": null, se borra; si llega un valor, se \
-            reemplaza. El status del conductor no cambia.
+            reemplaza. document_number no es editable: puede llegar con el valor guardado, pero \
+            con otro valor responde 400. El status del conductor no cambia y, si llega en el \
+            cuerpo, se ignora.
 
             """ + FLEET_ADMIN_ONLY)
     @ApiResponses({
@@ -238,7 +240,9 @@ public class DriverController {
         @ApiResponse(responseCode = "400",
             description = """
                 INVALID_DATA: uno o más campos no cumplen su regla (REQUIRED si falta un campo \
-                obligatorio); errors trae un elemento por cada campo inválido. INVALID_JSON: el \
+                obligatorio); errors trae un elemento por cada campo inválido. Si el resto del \
+                cuerpo es válido y document_number llega con un valor distinto al guardado, errors \
+                trae {"field": "document_number", "code": "NOT_EDITABLE"}. INVALID_JSON: el \
                 cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
@@ -257,7 +261,8 @@ public class DriverController {
     @PutMapping("/{id}")
     public DriverResponse update(@PathVariable String id, @Valid @RequestBody UpdateDriverRequest request) {
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
-                request.getFullName(), request.getEmail(), request.isPhonePresent(), request.getPhone()));
+                request.getFullName(), request.getEmail(), request.isPhonePresent(), request.getPhone(),
+                request.getDocumentNumber()));
         return DriverResponse.from(driver);
     }
 
