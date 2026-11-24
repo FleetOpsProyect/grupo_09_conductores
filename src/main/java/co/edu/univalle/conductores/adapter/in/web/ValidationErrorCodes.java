@@ -17,6 +17,7 @@ final class ValidationErrorCodes {
     static final String INVALID_LENGTH = "INVALID_LENGTH";
     static final String INVALID_FORMAT = "INVALID_FORMAT";
     static final String VALUE_NOT_ALLOWED = "VALUE_NOT_ALLOWED";
+    static final String NOT_EDITABLE = "NOT_EDITABLE";
 
     /** When a field fails several rules, the code listed first wins. */
     private static final List<String> PRIORITY =

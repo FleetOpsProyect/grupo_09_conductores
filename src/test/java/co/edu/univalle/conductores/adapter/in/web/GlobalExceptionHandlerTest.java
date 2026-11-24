@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.domain.DriverStatus;
+import co.edu.univalle.conductores.domain.FieldNotEditableException;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import co.edu.univalle.conductores.domain.StatusNotAllowedException;
 import jakarta.validation.Validation;
@@ -75,6 +76,16 @@ class GlobalExceptionHandlerTest {
     @SuppressWarnings("unused")
     private void endpoint(SampleRequest body, int page, DriverStatus status) {
         // Only used to build MethodParameter instances.
+    }
+
+    @Test
+    void fieldNotEditableIsInvalidDataWithNotEditableCode() {
+        ResponseEntity<ErrorResponse> response = handler.handleFieldNotEditable(
+                new FieldNotEditableException("document_number"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody().code()).isEqualTo("INVALID_DATA");
+        assertThat(response.getBody().errors()).containsExactly(new FieldError("document_number", "NOT_EDITABLE"));
     }
 
     @Test
@@ -224,13 +235,12 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void statusNotAllowedReturnsConflict() {
-        StatusNotAllowedException ex =
-                new StatusNotAllowedException("El conductor no tiene un bloqueo médico activo");
+        StatusNotAllowedException ex = new StatusNotAllowedException("El conductor no está inhabilitado por incidente");
         ResponseEntity<ErrorResponse> response = handler.handleStatusNotAllowed(ex, request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody().code()).isEqualTo("STATUS_NOT_ALLOWED");
-        assertThat(response.getBody().message()).isEqualTo("El conductor no tiene un bloqueo médico activo");
+        assertThat(response.getBody().message()).isEqualTo("El conductor no está inhabilitado por incidente");
         assertThat(response.getBody().errors()).isEmpty();
     }
 

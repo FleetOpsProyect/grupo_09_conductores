@@ -63,7 +63,7 @@ class FirestoreDriverAdapterTest {
             null, OffsetDateTime.of(2026, 11, 5, 10, 0, 0, 0, ZoneOffset.ofHours(-5)));
 
     /** Repository operations that call Firestore. */
-    enum Operation { CREATE, FIND_BY_ID, FIND_ALL, SAVE, SAVE_MEDICAL_RELEASE }
+    enum Operation { CREATE, FIND_BY_ID, FIND_ALL, SAVE, SAVE_MEDICAL_RELEASE, UPDATE_WITH_OUTBOX }
 
     @Mock
     private Firestore firestore;
@@ -366,7 +366,7 @@ class FirestoreDriverAdapterTest {
     private ApiFuture<Object> stub(Operation operation) {
         ApiFuture<Object> future = mock(ApiFuture.class);
         switch (operation) {
-            case CREATE -> {
+            case CREATE, UPDATE_WITH_OUTBOX -> {
                 when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
                 when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
                 when(firestore.collection(OutboxEventDocument.COLLECTION)).thenReturn(outboxEvents);
@@ -421,6 +421,7 @@ class FirestoreDriverAdapterTest {
             case FIND_ALL -> adapter.findAll(null, 0, 10);
             case SAVE_MEDICAL_RELEASE -> adapter.saveMedicalRelease(
                     DRIVER, "Notas de prueba", OffsetDateTime.now(), pendingActivationEvent());
+            case UPDATE_WITH_OUTBOX -> adapter.updateWithOutbox(DRIVER, pendingActivationEvent());
         }
     }
 
