@@ -128,7 +128,7 @@ class ReleaseMedicalBlockServiceTest {
 
         assertThatThrownBy(() -> service.release(DRIVER_ID, command))
                 .isInstanceOf(StatusNotAllowedException.class)
-                .hasMessageContaining("no tiene un bloqueo médico activo");
+                .hasMessage("El conductor no está inhabilitado por incidente");
 
         assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
         assertThat(driver.isMedicalBlock()).isFalse();

@@ -205,7 +205,7 @@ class DriverTest {
 
         assertThatThrownBy(() -> driver.releaseMedicalBlock(NOW.plusHours(1)))
                 .isInstanceOf(StatusNotAllowedException.class)
-                .hasMessageContaining("no tiene un bloqueo médico activo");
+                .hasMessage("El conductor no está inhabilitado por incidente");
 
         assertThat(driver.isMedicalBlock()).isFalse();
         assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);

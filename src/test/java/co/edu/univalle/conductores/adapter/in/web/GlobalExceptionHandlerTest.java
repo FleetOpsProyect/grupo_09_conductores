@@ -235,13 +235,12 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void statusNotAllowedReturnsConflict() {
-        StatusNotAllowedException ex =
-                new StatusNotAllowedException("El conductor no tiene un bloqueo médico activo");
+        StatusNotAllowedException ex = new StatusNotAllowedException("El conductor no está inhabilitado por incidente");
         ResponseEntity<ErrorResponse> response = handler.handleStatusNotAllowed(ex, request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody().code()).isEqualTo("STATUS_NOT_ALLOWED");
-        assertThat(response.getBody().message()).isEqualTo("El conductor no tiene un bloqueo médico activo");
+        assertThat(response.getBody().message()).isEqualTo("El conductor no está inhabilitado por incidente");
         assertThat(response.getBody().errors()).isEmpty();
     }
 
