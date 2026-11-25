@@ -659,6 +659,49 @@ class DriverControllerIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void updateWithInvalidFieldsAndDifferentDocumentNumberListsEveryField() throws Exception {
+        String document = uniqueDocument();
+        String id = MAPPER.readTree(register(document).getBody()).get("id").asText();
+        String other = document.equals("0000000001") ? "0000000002" : "0000000001";
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"no-es-un-correo","document_number":"%s"}
+                """.formatted(other));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        JsonNode body = MAPPER.readTree(response.getBody());
+        assertThat(body.get("code").asText()).isEqualTo("INVALID_DATA");
+        assertThat(fieldCodes(body)).containsExactlyInAnyOrderEntriesOf(
+                Map.of("email", "INVALID_FORMAT", "document_number", "NOT_EDITABLE"));
+        assertThat(outboxEvents(id, "driver_updated_event")).isEmpty();
+    }
+
+    @Test
+    void updateWithInvalidFieldsAndSameDocumentNumberListsOnlyTheInvalidFields() throws Exception {
+        String document = uniqueDocument();
+        String id = MAPPER.readTree(register(document).getBody()).get("id").asText();
+
+        ResponseEntity<String> response = put(id, """
+                {"full_name":"Carlos A. Pérez","email":"no-es-un-correo","document_number":"%s"}
+                """.formatted(document));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody())))
+                .containsExactlyEntriesOf(Map.of("email", "INVALID_FORMAT"));
+    }
+
+    @Test
+    void updateWithInvalidFieldsOfUnknownDriverReturns400WithTheBodyErrors() throws Exception {
+        ResponseEntity<String> response = put(UUID.randomUUID().toString(), """
+                {"full_name":"Carlos A. Pérez","email":"no-es-un-correo","document_number":"1144056789"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(fieldCodes(MAPPER.readTree(response.getBody())))
+                .containsExactlyEntriesOf(Map.of("email", "INVALID_FORMAT"));
+    }
+
+    @Test
     void updateWithSameDocumentNumberIsAccepted() throws Exception {
         String document = uniqueDocument();
         String id = MAPPER.readTree(register(document).getBody()).get("id").asText();

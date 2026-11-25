@@ -32,6 +32,7 @@ class ValidationErrorCodesTest {
         "Negative, VALUE_NOT_ALLOWED",
         "NegativeOrZero, VALUE_NOT_ALLOWED",
         "typeMismatch, INVALID_TYPE",
+        "NotEditable, NOT_EDITABLE",
         "Future, INVALID_FORMAT"
     })
     void mapsConstraintToCode(String constraint, String expected) {

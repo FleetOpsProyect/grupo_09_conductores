@@ -87,6 +87,15 @@ class DriverTest {
     }
 
     @Test
+    void isDifferentDocumentNumberComparesWithoutSurroundingSpaces() {
+        Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", null, NOW);
+
+        assertThat(driver.isDifferentDocumentNumber(null)).isFalse();
+        assertThat(driver.isDifferentDocumentNumber(" 1144056789 ")).isFalse();
+        assertThat(driver.isDifferentDocumentNumber("1144056780")).isTrue();
+    }
+
+    @Test
     void registerAcceptsEmailWithSingleLetterExtension() {
         Driver driver = Driver.register("Carlos Pérez", "1144056789", "ana@x.c", null, NOW);
 

@@ -16,6 +16,7 @@ import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
+import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -34,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -249,9 +251,9 @@ public class DriverController {
         @ApiResponse(responseCode = "400",
             description = """
                 INVALID_DATA: uno o más campos no cumplen su regla (REQUIRED si falta un campo \
-                obligatorio); errors trae un elemento por cada campo inválido. Si el resto del \
-                cuerpo es válido y document_number llega con un valor distinto al guardado, errors \
-                trae {"field": "document_number", "code": "NOT_EDITABLE"}. INVALID_JSON: el \
+                obligatorio); errors trae un elemento por cada campo inválido. Si document_number \
+                llega con un valor distinto al guardado, errors trae también \
+                {"field": "document_number", "code": "NOT_EDITABLE"}. INVALID_JSON: el \
                 cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
@@ -270,7 +272,13 @@ public class DriverController {
     @PutMapping("/{id}")
     public DriverResponse update(@PathVariable String id,
             @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) UUID correlationId,
-            @Valid @RequestBody UpdateDriverRequest request) {
+            @Valid @RequestBody UpdateDriverRequest request, BindingResult bodyErrors) {
+        if (bodyErrors.hasErrors()) {
+            if (changesDocumentNumber(id, request.getDocumentNumber())) {
+                bodyErrors.rejectValue("documentNumber", ValidationErrorCodes.NOT_EDITABLE_RULE);
+            }
+            throw new InvalidRequestBodyException(bodyErrors);
+        }
         Driver driver = updateDriver.update(parseId(id), new UpdateDriver.Command(
                 request.getFullName(), request.getEmail(), request.isPhonePresent(), request.getPhone(),
                 request.getDocumentNumber(), correlationId));
@@ -381,6 +389,22 @@ public class DriverController {
      * @return parsed UUID
      * @throws DriverNotFoundException when the id is not a canonical UUID
      */
+    /**
+     * With an already invalid body, tells whether document_number also changes, so the 400 lists it with the
+     * other fields (HU-08, c5). If the driver cannot be read (it does not exist, the id is not a UUID or
+     * Firestore does not answer), the 400 keeps only the body errors, as before reading it.
+     */
+    private boolean changesDocumentNumber(String id, String documentNumber) {
+        if (documentNumber == null) {
+            return false;
+        }
+        try {
+            return getDriver.get(parseId(id)).isDifferentDocumentNumber(documentNumber);
+        } catch (DriverNotFoundException | PersistenceUnavailableException ex) {
+            return false;
+        }
+    }
+
     private static UUID parseId(String id) {
         if (!UUID_PATTERN.matcher(id).matches()) {
             throw new DriverNotFoundException(id);

@@ -19,6 +19,9 @@ final class ValidationErrorCodes {
     static final String VALUE_NOT_ALLOWED = "VALUE_NOT_ALLOWED";
     static final String NOT_EDITABLE = "NOT_EDITABLE";
 
+    /** Error code the controller adds to the binding result for a non-editable field that changes. */
+    static final String NOT_EDITABLE_RULE = "NotEditable";
+
     /** When a field fails several rules, the code listed first wins. */
     private static final List<String> PRIORITY =
             List.of(REQUIRED, INVALID_TYPE, INVALID_LENGTH, INVALID_FORMAT, VALUE_NOT_ALLOWED);
@@ -39,7 +42,8 @@ final class ValidationErrorCodes {
             Map.entry("PositiveOrZero", VALUE_NOT_ALLOWED),
             Map.entry("Negative", VALUE_NOT_ALLOWED),
             Map.entry("NegativeOrZero", VALUE_NOT_ALLOWED),
-            Map.entry("typeMismatch", INVALID_TYPE));
+            Map.entry("typeMismatch", INVALID_TYPE),
+            Map.entry(NOT_EDITABLE_RULE, NOT_EDITABLE));
 
     private ValidationErrorCodes() {
     }

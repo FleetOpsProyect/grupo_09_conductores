@@ -63,7 +63,7 @@ public class UpdateDriverService implements UpdateDriver {
     }
 
     private static void rejectDocumentNumberChange(Driver driver, String documentNumber) {
-        if (documentNumber != null && !documentNumber.trim().equals(driver.getDocumentNumber())) {
+        if (driver.isDifferentDocumentNumber(documentNumber)) {
             throw new FieldNotEditableException(DOCUMENT_NUMBER);
         }
     }

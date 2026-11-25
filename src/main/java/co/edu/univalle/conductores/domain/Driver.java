@@ -90,6 +90,17 @@ public class Driver {
     }
 
     /**
+     * Indica si un número de documento recibido es distinto al guardado, sin contar los espacios al inicio
+     * y al final. El número de documento no es editable (HU-08).
+     *
+     * @param received número de documento recibido, o null si no llegó
+     * @return true si llegó y es distinto al guardado
+     */
+    public boolean isDifferentDocumentNumber(String received) {
+        return received != null && !received.trim().equals(documentNumber);
+    }
+
+    /**
      * Cambia solo los datos editables. El número de documento y el estado no
      * cambian aquí.
      *
