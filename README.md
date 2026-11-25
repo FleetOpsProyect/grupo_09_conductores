@@ -226,11 +226,11 @@ Los campos adicionales se ignoran.
 
 | Caso | Qué hace | Log | Métrica |
 | :--- | :--- | :--- | :--- |
-| Evento válido | Cambia el estado del conductor y confirma el mensaje. | — | `drivers_events_consumed_total{result="processed"}` |
+| Evento válido | Cambia el estado del conductor y confirma el mensaje. | INFO con `owner_id` y `document_id` en `document_expired_event` | `drivers_events_consumed_total{result="processed"}` |
 | `event_id` ya procesado | Confirma el mensaje sin cambios. | — | `drivers_events_consumed_total{result="duplicate"}` |
 | Documento que no es de un conductor (`owner_type` distinto de `DRIVER`) | Confirma el mensaje sin cambios, sin filtrar por `document_type`. | DEBUG | `drivers_events_consumed_total{result="ignored"}` |
 | JSON inválido, campo faltante o `event_type` desconocido | Lo envía a la DLQ sin reintentos, con los atributos `event_type` y `reason`. | ERROR con `event_id` y el motivo | `drivers_events_dlq_total{reason="invalid_message"}` |
-| Conductor inexistente | Lo envía a la DLQ sin reintentos. | WARN | `drivers_events_dlq_total{reason="driver_not_found"}` |
+| Conductor inexistente | Lo envía a la DLQ sin reintentos. | WARN con `owner_id` (o `driver_id`) y `event_id` | `drivers_events_dlq_total{reason="driver_not_found"}` |
 | Firestore no responde | No confirma el mensaje; SQS lo reentrega y, al 3.er intento fallido, la redrive policy (`maxReceiveCount = 3`) lo mueve a la DLQ. | ERROR en el 3.er intento | `drivers_events_dlq_total{reason="max_retries"}` |
 
 El número de intento sale del atributo `ApproximateReceiveCount` de SQS, que Spring Cloud AWS expone

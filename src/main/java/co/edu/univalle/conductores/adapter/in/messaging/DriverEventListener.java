@@ -3,6 +3,7 @@ package co.edu.univalle.conductores.adapter.in.messaging;
 import co.edu.univalle.conductores.application.logging.LogContext;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.Command;
+import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.EventProcessingResult;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DlqSenderPort;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
@@ -78,6 +79,7 @@ public class DriverEventListener {
             String receiveCount) {
         String eventType = UNKNOWN;
         String eventId = UNKNOWN;
+        Command command = null;
 
         try {
             JsonNode root = unwrapSnsNotification(parseJson(payload));
@@ -87,17 +89,23 @@ public class DriverEventListener {
             MDC.put(LogContext.EVENT_TYPE, eventType);
             MDC.put(LogContext.CORRELATION_ID, textOrUnknown(root, "correlation_id"));
 
-            Command command = toCommand(root);
+            command = toCommand(root);
             if (command == null) {
                 log.debug("Evento {} ({}) de un documento que no es de conductor: se confirma sin cambios",
                         eventId, eventType);
                 consumerMetrics.recordConsumed(eventType, "ignored");
                 return;
             }
-            processDriverEvent.process(command);
+            EventProcessingResult result = processDriverEvent.process(command);
+            if (result == EventProcessingResult.PROCESSED
+                    && ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType)) {
+                log.info("Bloqueo por documento vencido aplicado: owner_id={}, document_id={}",
+                        command.driverId(), textOrUnknown(root.get("data"), "document_id"));
+            }
 
         } catch (DriverNotFoundException ex) {
-            log.warn("Conductor no encontrado para el evento {} ({}): {}", eventId, eventType, ex.getMessage());
+            log.warn("Conductor no encontrado, el evento pasa a la DLQ: {}={}, event_id={}, event_type={}",
+                    driverIdField(eventType), command == null ? UNKNOWN : command.driverId(), eventId, eventType);
             consumerMetrics.recordDlq(eventType, "driver_not_found");
             dlqSender.sendToDlq(payload, eventType, "driver_not_found");
 
@@ -119,6 +127,11 @@ public class DriverEventListener {
             MDC.remove(LogContext.EVENT_TYPE);
             MDC.remove(LogContext.CORRELATION_ID);
         }
+    }
+
+    /** Name of the field the driver id came from, to log it as the publisher sent it. */
+    private static String driverIdField(String eventType) {
+        return ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType) ? "owner_id" : "driver_id";
     }
 
     /**

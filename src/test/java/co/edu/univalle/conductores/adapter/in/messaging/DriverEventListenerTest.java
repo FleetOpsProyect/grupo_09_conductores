@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -13,6 +14,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.Command;
+import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.EventProcessingResult;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DlqSenderPort;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
@@ -349,8 +351,63 @@ class DriverEventListenerTest {
 
         verify(consumerMetrics).recordDlq("severe_incident_reported_event", "driver_not_found");
         verify(dlqSender).sendToDlq(payload, "severe_incident_reported_event", "driver_not_found");
-        assertThat(logs.list).singleElement()
-                .satisfies(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                    .contains("driver_id=" + DRIVER_ID)
+                    .contains("event_id=" + EVENT_ID);
+        });
+    }
+
+    @Test
+    void logsOwnerIdAndEventIdAtWarnWhenTheDocumentOwnerDoesNotExist() {
+        String payload = validEnvelope().toString();
+        doThrow(new DriverNotFoundException(DRIVER_ID)).when(processDriverEvent).process(any());
+
+        listener.onMessage(payload, "1");
+
+        verify(dlqSender).sendToDlq(payload, EXPIRED, "driver_not_found");
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                    .contains("owner_id=" + DRIVER_ID)
+                    .contains("event_id=" + EVENT_ID);
+        });
+    }
+
+    @Test
+    void logsOwnerIdAndDocumentIdAtInfoWhenTheBlockIsApplied() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+
+        listener.onMessage(validEnvelope().toString(), "1");
+
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage())
+                    .contains("owner_id=" + DRIVER_ID)
+                    .contains("document_id=019a2f4e-8b1c-7d2a-9e3f-1a2b3c4d5e6f");
+            assertThat(event.getMDCPropertyMap())
+                    .containsEntry("event_id", EVENT_ID.toString())
+                    .containsEntry("correlation_id", CORRELATION_ID.toString());
+        });
+    }
+
+    @Test
+    void doesNotLogTheBlockAgainForADuplicateEvent() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.DUPLICATE);
+
+        listener.onMessage(validEnvelope().toString(), "1");
+
+        assertThat(logs.list).isEmpty();
+    }
+
+    @Test
+    void writesTheBlockInfoLogOnlyForDocumentExpiredEvents() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+
+        listener.onMessage(driverIdEnvelope(INCIDENT).toString(), "1");
+
+        assertThat(logs.list).isEmpty();
     }
 
     @ParameterizedTest
