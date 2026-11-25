@@ -253,9 +253,24 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         return envelope.toString();
     }
 
+    private String renewedEnvelope(UUID eventId, UUID correlationId, String ownerId) {
+        ObjectNode envelope = envelopeWithoutData(eventId, RENEWED, correlationId);
+        envelope.putObject("data")
+                .put("document_id", UUID.randomUUID().toString())
+                .put("previous_document_id", UUID.randomUUID().toString())
+                .put("origin", "RENEWAL")
+                .put("document_type", "DRIVER_LICENSE")
+                .put("owner_type", "DRIVER")
+                .put("owner_id", ownerId);
+        return envelope.toString();
+    }
+
     private String envelope(UUID eventId, String eventType, UUID driverId) {
         if (EXPIRED.equals(eventType)) {
             return expiredEnvelope(eventId, UUID.randomUUID(), "DRIVER", driverId.toString());
+        }
+        if (RENEWED.equals(eventType)) {
+            return renewedEnvelope(eventId, UUID.randomUUID(), driverId.toString());
         }
         ObjectNode envelope = envelopeWithoutData(eventId, eventType, UUID.randomUUID());
         envelope.putObject("data").put("driver_id", driverId.toString());

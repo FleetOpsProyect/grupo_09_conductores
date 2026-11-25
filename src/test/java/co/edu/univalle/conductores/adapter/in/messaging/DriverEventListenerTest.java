@@ -45,6 +45,7 @@ class DriverEventListenerTest {
     private static final UUID CORRELATION_ID = UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private static final String OCCURRED_AT = "2026-11-14T12:00:00-05:00";
     private static final String EXPIRED = "document_expired_event";
+    private static final String RENEWED = "document_renewed_event";
     private static final String INCIDENT = "severe_incident_reported_event";
 
     private final JsonMapper jsonMapper = new JsonMapper();
@@ -135,13 +136,60 @@ class DriverEventListenerTest {
         ObjectNode notification = jsonMapper.createObjectNode();
         notification.put("Type", "Notification");
         notification.put("MessageId", "sns-123");
-        notification.put("Message", driverIdEnvelope("document_renewed_event").toString());
+        notification.put("Message", renewedEnvelope().toString());
 
         listener.onMessage(notification.toString(), "1");
 
         ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
         verify(processDriverEvent).process(captor.capture());
         assertThat(captor.getValue().eventType()).isEqualTo("document_renewed_event");
+    }
+
+    @Test
+    void processesRenewedEventWithoutExpirationDateUsingOwnerIdAsDriver() {
+        listener.onMessage(renewedEnvelope().toString(), "1");
+
+        ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
+        verify(processDriverEvent).process(captor.capture());
+        assertThat(captor.getValue().eventType()).isEqualTo(RENEWED);
+        assertThat(captor.getValue().driverId()).isEqualTo(DRIVER_ID);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"document_id", "document_type", "owner_type", "owner_id"})
+    void renewedMissingFieldGoesToDlqWithErrorLog(String field) {
+        String payload = renewedEnvelopeWithout(field).toString();
+
+        listener.onMessage(payload, "1");
+
+        verify(dlqSender).sendToDlq(payload, RENEWED, "invalid_message");
+        verify(processDriverEvent, never()).process(any());
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).contains(field);
+        });
+    }
+
+    @Test
+    void renewedWithOnlyDriverIdIsRejectedAsInvalidMessage() {
+        String payload = driverIdEnvelope(RENEWED).toString();
+
+        listener.onMessage(payload, "1");
+
+        verify(dlqSender).sendToDlq(payload, RENEWED, "invalid_message");
+        verify(processDriverEvent, never()).process(any());
+    }
+
+    @Test
+    void renewedOfAVehicleIsAcknowledgedWithoutChanges() {
+        ObjectNode envelope = renewedEnvelope();
+        ((ObjectNode) envelope.get("data")).put("owner_type", "VEHICLE");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(processDriverEvent, never()).process(any());
+        verify(consumerMetrics).recordConsumed(RENEWED, "ignored");
+        verify(dlqSender, never()).sendToDlq(any(), any(), any());
     }
 
     @Test
@@ -450,7 +498,27 @@ class DriverEventListenerTest {
         return envelope;
     }
 
-    /** A valid event whose data carries driver_id (document_renewed_event, severe_incident_reported_event). */
+    /** A valid document_renewed_event of a driver's license, with the extra fields Documentación sends. */
+    private ObjectNode renewedEnvelope() {
+        ObjectNode envelope = envelopeWithoutData(RENEWED);
+        envelope.putObject("data")
+                .put("document_id", "019a3b10-2c4d-7e5f-8a6b-7c8d9e0f1a2b")
+                .put("previous_document_id", "019a2f4e-8b1c-7d2a-9e3f-1a2b3c4d5e6f")
+                .put("origin", "RENEWAL")
+                .put("document_type", "DRIVER_LICENSE")
+                .put("owner_type", "DRIVER")
+                .put("owner_id", DRIVER_ID.toString())
+                .put("new_expiration_date", "2028-09-24");
+        return envelope;
+    }
+
+    private ObjectNode renewedEnvelopeWithout(String field) {
+        ObjectNode envelope = renewedEnvelope();
+        ((ObjectNode) envelope.get("data")).remove(field);
+        return envelope;
+    }
+
+    /** A valid event whose data carries driver_id (severe_incident_reported_event). */
     private ObjectNode driverIdEnvelope(String eventType) {
         ObjectNode envelope = envelopeWithoutData(eventType);
         envelope.putObject("data").put("driver_id", DRIVER_ID.toString());
