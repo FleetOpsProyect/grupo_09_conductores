@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -47,7 +48,8 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
 
     @Override
     public EventProcessingResult process(Command command) {
-        Function<Driver, OutboxEvent> change = changeFor(command);
+        AtomicBoolean changed = new AtomicBoolean(true);
+        Function<Driver, OutboxEvent> change = changeFor(command, changed);
 
         boolean applied = processedEventRepository.applyOnce(
                 command.eventId(), command.eventType(), command.driverId(), clock.instant(), change);
@@ -57,14 +59,14 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
             return EventProcessingResult.DUPLICATE;
         }
         consumerMetrics.recordConsumed(command.eventType(), "processed");
-        return EventProcessingResult.PROCESSED;
+        return changed.get() ? EventProcessingResult.PROCESSED : EventProcessingResult.PROCESSED_WITHOUT_CHANGE;
     }
 
     /**
      * Change to apply inside the transaction, on the driver as it is stored when it runs. It returns the
      * outbox event to store with the change, or null.
      */
-    private Function<Driver, OutboxEvent> changeFor(Command command) {
+    private Function<Driver, OutboxEvent> changeFor(Command command, AtomicBoolean changed) {
         OffsetDateTime occurredAt = command.occurredAt();
         return switch (command.eventType()) {
             case DOCUMENT_EXPIRED_EVENT -> driver -> {
@@ -73,7 +75,8 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
                 return wasActive ? blockedEvent(driver, command.correlationId()) : null;
             };
             case DOCUMENT_RENEWED_EVENT -> driver -> {
-                driver.removeDocumentBlock(occurredAt);
+                // The transaction may run this change more than once; the last run is the one committed.
+                changed.set(driver.removeDocumentBlock(occurredAt));
                 return null;
             };
             case SEVERE_INCIDENT_REPORTED_EVENT -> driver -> {

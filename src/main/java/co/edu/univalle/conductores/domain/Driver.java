@@ -127,13 +127,19 @@ public class Driver {
     }
 
     /**
-     * Remueve el bloqueo por documentos vencidos cuando se renuevan.
+     * Remueve el bloqueo por documentos vencidos cuando se renuevan. Si el conductor no tenía ese bloqueo,
+     * no cambia nada.
      *
      * @param now momento en que se remueve el bloqueo
+     * @return true si había bloqueo y se quitó; false si no había nada que quitar
      */
-    public void removeDocumentBlock(OffsetDateTime now) {
+    public boolean removeDocumentBlock(OffsetDateTime now) {
+        if (!this.documentBlock) {
+            return false;
+        }
         this.documentBlock = false;
         this.updatedAt = now;
+        return true;
     }
 
     /**

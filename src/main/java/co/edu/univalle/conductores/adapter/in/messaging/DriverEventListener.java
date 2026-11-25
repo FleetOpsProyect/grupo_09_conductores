@@ -103,6 +103,11 @@ public class DriverEventListener {
                 log.info("Bloqueo por documento vencido aplicado: owner_id={}, document_id={}",
                         command.driverId(), textOrUnknown(root.get("data"), "document_id"));
             }
+            if (result == EventProcessingResult.PROCESSED
+                    && ProcessDriverEvent.DOCUMENT_RENEWED_EVENT.equals(eventType)) {
+                log.info("Bloqueo por documentos quitado: owner_id={}, document_id={}",
+                        command.driverId(), textOrUnknown(root.get("data"), "document_id"));
+            }
 
         } catch (DriverNotFoundException ex) {
             log.warn("Conductor no encontrado, el evento pasa a la DLQ: {}={}, event_id={}, event_type={}",

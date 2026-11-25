@@ -21,7 +21,10 @@ public interface ProcessDriverEvent {
      * Resultado del procesamiento de un evento.
      */
     enum EventProcessingResult {
+        /** Aplicado y el conductor cambió. */
         PROCESSED,
+        /** Aplicado, pero el conductor no cambió (por ejemplo, renovación sin bloqueo por documentos). */
+        PROCESSED_WITHOUT_CHANGE,
         DUPLICATE
     }
 
