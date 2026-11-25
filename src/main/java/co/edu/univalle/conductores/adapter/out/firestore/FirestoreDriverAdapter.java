@@ -10,6 +10,7 @@ import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
+import co.edu.univalle.conductores.domain.StatusNotAllowedException;
 import com.google.api.core.ApiFuture;
 import com.google.api.gax.rpc.ApiException;
 import com.google.api.gax.rpc.StatusCode;
@@ -38,6 +39,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -108,28 +110,36 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
     }
 
     /**
-     * Guarda el alta médica de un conductor y registra opcionalmente el evento en el outbox
-     * en una sola transacción.
+     * Registra el alta médica leyendo el conductor dentro de la transacción, para que el status resultante
+     * y el evento usen los bloqueos actuales. Guarda el conductor completo con las notas y la fecha del alta,
+     * y el evento si {@code release} devuelve uno.
      *
-     * @param driver conductor con el bloqueo médico removido
-     * @param notes observaciones o notas del alta médica (opcional, puede ser null)
+     * @param id identificador del conductor
+     * @param notes observaciones del alta médica, o null
      * @param releasedAt momento en que se registró el alta
-     * @param outboxEvent evento a guardar en outbox_events, o null si no aplica
+     * @param release cambio sobre el conductor leído; devuelve el evento del outbox, o null si no aplica
+     * @return el conductor tal como quedó guardado
      */
     @Override
-    public void saveMedicalRelease(
-            Driver driver, String notes, OffsetDateTime releasedAt, OutboxEvent outboxEvent) {
-        DocumentReference driverRef = drivers().document(driver.getId().toString());
-        Map<String, Object> driverData = DriverDocument.fromDomainWithMedicalRelease(driver, notes, releasedAt);
+    public Driver releaseMedical(
+            UUID id, String notes, OffsetDateTime releasedAt, Function<Driver, OutboxEvent> release) {
+        DocumentReference driverRef = drivers().document(id.toString());
 
-        await(firestore.runTransaction(transaction -> {
-            transaction.set(driverRef, driverData);
+        return await(firestore.runTransaction(transaction -> {
+            DocumentSnapshot snapshot = transaction.get(driverRef).get();
+            if (!snapshot.exists()) {
+                throw new DriverNotFoundException(id);
+            }
+            Driver driver = DriverDocument.toDomain(snapshot.getData());
+            OutboxEvent outboxEvent = release.apply(driver);
+
+            transaction.set(driverRef, DriverDocument.fromDomainWithMedicalRelease(driver, notes, releasedAt));
             if (outboxEvent != null) {
                 DocumentReference outboxRef = firestore.collection(OutboxEventDocument.COLLECTION)
                         .document(outboxEvent.envelope().eventId().toString());
                 transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
             }
-            return null;
+            return driver;
         }));
     }
 
@@ -213,7 +223,8 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
             Driver driver = DriverDocument.toDomain(driverSnapshot.getData());
             change.accept(driver);
 
-            transaction.set(driverRef, DriverDocument.fromDomain(driver));
+            // merge: keeps medical_release_notes and medical_released_at, which the domain does not carry.
+            transaction.set(driverRef, DriverDocument.fromDomain(driver), SetOptions.merge());
             transaction.set(processedRef, ProcessedEventDocument.of(eventId, eventType, driverId, processedAt));
             return true;
         }));
@@ -225,8 +236,9 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
     }
 
     /**
-     * Updates the driver with a merge, so fields outside {@link DriverDocument#fromDomain(Driver)} such as
-     * medical_release_notes survive, and stores the outbox event in the same transaction.
+     * Updates only the editable fields of the driver and stores the outbox event in the same transaction.
+     * status, the blocks and medical_release_notes are not written, so a block the consumer applied after
+     * this request read the driver is kept.
      *
      * @param driver driver with the new data
      * @param outboxEvent driver_updated_event to store in outbox_events
@@ -238,7 +250,7 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
                 .document(outboxEvent.envelope().eventId().toString());
 
         await(firestore.runTransaction(transaction -> {
-            transaction.set(driverRef, DriverDocument.fromDomain(driver), SetOptions.merge());
+            transaction.update(driverRef, DriverDocument.editableFields(driver));
             transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
             return null;
         }));
@@ -334,6 +346,9 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
         }
         if (failure instanceof DriverNotFoundException notFound) {
             return notFound;
+        }
+        if (failure instanceof StatusNotAllowedException notAllowed) {
+            return notAllowed;
         }
         ApiException api = findApiException(failure);
         if (api != null && TRANSIENT_CODES.contains(api.getStatusCode().getCode())) {

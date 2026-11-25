@@ -16,6 +16,7 @@ import co.edu.univalle.conductores.application.event.DriverEventType;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.domain.Driver;
+import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
@@ -63,7 +64,7 @@ class FirestoreDriverAdapterTest {
             null, OffsetDateTime.of(2026, 11, 5, 10, 0, 0, 0, ZoneOffset.ofHours(-5)));
 
     /** Repository operations that call Firestore. */
-    enum Operation { CREATE, FIND_BY_ID, FIND_ALL, SAVE, SAVE_MEDICAL_RELEASE, UPDATE_WITH_OUTBOX }
+    enum Operation { CREATE, FIND_BY_ID, FIND_ALL, SAVE, RELEASE_MEDICAL, UPDATE_WITH_OUTBOX }
 
     @Mock
     private Firestore firestore;
@@ -302,52 +303,44 @@ class FirestoreDriverAdapterTest {
 
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void saveMedicalReleaseWritesDriverAndOutboxInTransaction() throws Exception {
+    void releaseMedicalReadsTheDriverInTheTransactionAndWritesDriverAndOutbox() throws Exception {
         when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
         when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
         when(firestore.collection(OutboxEventDocument.COLLECTION)).thenReturn(outboxEvents);
         when(outboxEvents.document(any(String.class))).thenReturn(outboxDocument);
+        ArgumentCaptor<Transaction.Function> functionCaptor = captureTransaction();
 
-        ArgumentCaptor<Transaction.Function> functionCaptor =
-                ArgumentCaptor.forClass(Transaction.Function.class);
-        ApiFuture future = mock(ApiFuture.class);
-        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenReturn(null);
-        when(firestore.runTransaction(functionCaptor.capture())).thenReturn(future);
+        OffsetDateTime releasedAt = OffsetDateTime.of(2026, 11, 18, 14, 0, 0, 0, ZoneOffset.ofHours(-5));
+        Driver[] received = new Driver[1];
+        adapter.releaseMedical(DRIVER.getId(), "Alta médica completa", releasedAt, driver -> {
+            received[0] = driver;
+            return pendingActivationEvent();
+        });
 
-        OffsetDateTime releasedAt =
-                OffsetDateTime.of(2026, 11, 18, 14, 0, 0, 0, ZoneOffset.ofHours(-5));
-        OutboxEvent event = pendingActivationEvent();
-        adapter.saveMedicalRelease(DRIVER, "Alta médica completa", releasedAt, event);
+        Transaction transaction = transactionReading(storedDriverWithMedicalBlock());
+        Object result = functionCaptor.getValue().updateCallback(transaction);
 
-        Transaction transaction = mock(Transaction.class);
-        functionCaptor.getValue().updateCallback(transaction);
-
+        assertThat(received[0].isMedicalBlock()).isTrue();
+        assertThat(result).isSameAs(received[0]);
         ArgumentCaptor<Map<String, Object>> driverDataCaptor = ArgumentCaptor.forClass(Map.class);
         verify(transaction).set(eq(document), driverDataCaptor.capture());
         Map<String, Object> data = driverDataCaptor.getValue();
         assertThat(data.get("medical_release_notes")).isEqualTo("Alta médica completa");
         assertThat(data.get("medical_released_at")).isEqualTo(releasedAt.toString());
-
         verify(transaction).set(eq(outboxDocument), anyMap());
     }
 
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void saveMedicalReleaseWithoutOutboxDoesNotWriteOutboxInTransaction() throws Exception {
+    void releaseMedicalWithoutOutboxDoesNotWriteOutboxInTransaction() throws Exception {
         when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
         when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+        ArgumentCaptor<Transaction.Function> functionCaptor = captureTransaction();
 
-        ArgumentCaptor<Transaction.Function> functionCaptor =
-                ArgumentCaptor.forClass(Transaction.Function.class);
-        ApiFuture future = mock(ApiFuture.class);
-        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenReturn(null);
-        when(firestore.runTransaction(functionCaptor.capture())).thenReturn(future);
+        OffsetDateTime releasedAt = OffsetDateTime.of(2026, 11, 18, 14, 0, 0, 0, ZoneOffset.ofHours(-5));
+        adapter.releaseMedical(DRIVER.getId(), null, releasedAt, driver -> null);
 
-        OffsetDateTime releasedAt =
-                OffsetDateTime.of(2026, 11, 18, 14, 0, 0, 0, ZoneOffset.ofHours(-5));
-        adapter.saveMedicalRelease(DRIVER, null, releasedAt, null);
-
-        Transaction transaction = mock(Transaction.class);
+        Transaction transaction = transactionReading(storedDriverWithMedicalBlock());
         functionCaptor.getValue().updateCallback(transaction);
 
         ArgumentCaptor<Map<String, Object>> driverDataCaptor = ArgumentCaptor.forClass(Map.class);
@@ -355,8 +348,73 @@ class FirestoreDriverAdapterTest {
         Map<String, Object> data = driverDataCaptor.getValue();
         assertThat(data.get("medical_release_notes")).isNull();
         assertThat(data.get("medical_released_at")).isEqualTo(releasedAt.toString());
-
         verify(firestore, never()).collection(OutboxEventDocument.COLLECTION);
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void releaseMedicalThrowsDriverNotFoundWhenTheTransactionFindsNoDriver() throws Exception {
+        when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
+        when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+        ArgumentCaptor<Transaction.Function> functionCaptor = captureTransaction();
+        adapter.releaseMedical(DRIVER.getId(), null, OffsetDateTime.now(), driver -> null);
+
+        Transaction transaction = transactionReading(null);
+
+        assertThat(catchThrowable(() -> functionCaptor.getValue().updateCallback(transaction)))
+                .isInstanceOf(DriverNotFoundException.class);
+        verify(transaction, never()).set(any(DocumentReference.class), anyMap());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void updateWithOutboxWritesOnlyTheEditableFields() throws Exception {
+        when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
+        when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
+        when(firestore.collection(OutboxEventDocument.COLLECTION)).thenReturn(outboxEvents);
+        when(outboxEvents.document(any(String.class))).thenReturn(outboxDocument);
+        ArgumentCaptor<Transaction.Function> functionCaptor = captureTransaction();
+
+        adapter.updateWithOutbox(DRIVER, pendingActivationEvent());
+        Transaction transaction = mock(Transaction.class);
+        functionCaptor.getValue().updateCallback(transaction);
+
+        ArgumentCaptor<Map<String, Object>> fieldsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(transaction).update(eq(document), fieldsCaptor.capture());
+        assertThat(fieldsCaptor.getValue()).containsOnlyKeys("full_name", "email", "phone", "updated_at");
+        verify(transaction, never()).set(eq(document), anyMap());
+        verify(transaction).set(eq(outboxDocument), anyMap());
+    }
+
+    /** Captures the function the adapter passes to runTransaction; the future answers right away. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private ArgumentCaptor<Transaction.Function> captureTransaction() throws Exception {
+        ArgumentCaptor<Transaction.Function> functionCaptor = ArgumentCaptor.forClass(Transaction.Function.class);
+        ApiFuture future = mock(ApiFuture.class);
+        when(future.get(anyLong(), eq(TimeUnit.NANOSECONDS))).thenReturn(null);
+        when(firestore.runTransaction(functionCaptor.capture())).thenReturn(future);
+        return functionCaptor;
+    }
+
+    /** A transaction whose read of the driver returns {@code stored}, or a missing document when null. */
+    @SuppressWarnings("unchecked")
+    private Transaction transactionReading(Map<String, Object> stored) throws Exception {
+        Transaction transaction = mock(Transaction.class);
+        DocumentSnapshot snapshot = mock(DocumentSnapshot.class);
+        when(snapshot.exists()).thenReturn(stored != null);
+        if (stored != null) {
+            when(snapshot.getData()).thenReturn(stored);
+        }
+        ApiFuture<DocumentSnapshot> read = mock(ApiFuture.class);
+        when(read.get()).thenReturn(snapshot);
+        when(transaction.get(document)).thenReturn(read);
+        return transaction;
+    }
+
+    private static Map<String, Object> storedDriverWithMedicalBlock() {
+        Driver blocked = Driver.restore(DRIVER.getId(), DRIVER.getDocumentNumber(), DRIVER.getFullName(),
+                DRIVER.getEmail(), null, false, true, DRIVER.getCreatedAt(), DRIVER.getCreatedAt());
+        return DriverDocument.fromDomain(blocked);
     }
 
     /**
@@ -390,7 +448,7 @@ class FirestoreDriverAdapterTest {
                 when(countQuery.get()).thenReturn((ApiFuture) future);
                 stubPageQuery();
             }
-            case SAVE_MEDICAL_RELEASE -> {
+            case RELEASE_MEDICAL -> {
                 when(firestore.collection(DriverDocument.COLLECTION)).thenReturn(drivers);
                 when(drivers.document(DRIVER.getId().toString())).thenReturn(document);
                 when(firestore.runTransaction(any(Transaction.Function.class)))
@@ -419,8 +477,8 @@ class FirestoreDriverAdapterTest {
             case FIND_BY_ID -> adapter.findById(DRIVER.getId());
             case SAVE -> adapter.save(DRIVER);
             case FIND_ALL -> adapter.findAll(null, 0, 10);
-            case SAVE_MEDICAL_RELEASE -> adapter.saveMedicalRelease(
-                    DRIVER, "Notas de prueba", OffsetDateTime.now(), pendingActivationEvent());
+            case RELEASE_MEDICAL -> adapter.releaseMedical(
+                    DRIVER.getId(), "Notas de prueba", OffsetDateTime.now(), driver -> pendingActivationEvent());
             case UPDATE_WITH_OUTBOX -> adapter.updateWithOutbox(DRIVER, pendingActivationEvent());
         }
     }

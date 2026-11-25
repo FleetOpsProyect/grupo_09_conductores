@@ -7,6 +7,7 @@ import co.edu.univalle.conductores.domain.PageResult;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
  * Puerto de salida: lo que el núcleo necesita de la persistencia de conductores.
@@ -31,7 +32,8 @@ public interface DriverRepository {
 
     /**
      * Actualiza los datos editables de un conductor y registra el evento del outbox en una sola
-     * transacción. Los campos que el dominio no conoce, como las notas del alta médica, se conservan.
+     * transacción. Solo escribe full_name, email, phone y updated_at: el status, los bloqueos y las notas
+     * del alta médica guardados se conservan, aunque otro proceso los haya cambiado después de leer.
      *
      * @param driver conductor con los datos nuevos
      * @param outboxEvent evento driver_updated_event a guardar en outbox_events
@@ -57,13 +59,18 @@ public interface DriverRepository {
     PageResult<Driver> findAll(DriverStatus status, int page, int size);
 
     /**
-     * Guarda el alta médica de un conductor y registra opcionalmente el evento en el outbox
-     * en una sola transacción.
+     * Registra el alta médica en una sola transacción: lee el conductor actual, le aplica {@code release},
+     * que quita el bloqueo médico y decide el evento, y guarda el conductor, las notas, la fecha del alta y
+     * el evento. Leer dentro de la transacción evita pisar un bloqueo que el consumidor haya aplicado entre
+     * tanto: si el documento cambia antes de confirmar, Firestore repite la transacción y con ella
+     * {@code release}.
      *
-     * @param driver conductor con el bloqueo médico removido
-     * @param notes observaciones o notas del alta médica (opcional, puede ser null)
+     * @param id identificador del conductor
+     * @param notes observaciones del alta médica, o null
      * @param releasedAt momento en que se registró el alta
-     * @param outboxEvent evento a guardar en outbox_events, o null si no aplica
+     * @param release cambio sobre el conductor leído; devuelve el evento del outbox, o null si no aplica
+     * @return el conductor tal como quedó guardado
+     * @throws co.edu.univalle.conductores.domain.DriverNotFoundException si el conductor no existe
      */
-    void saveMedicalRelease(Driver driver, String notes, OffsetDateTime releasedAt, OutboxEvent outboxEvent);
+    Driver releaseMedical(UUID id, String notes, OffsetDateTime releasedAt, Function<Driver, OutboxEvent> release);
 }

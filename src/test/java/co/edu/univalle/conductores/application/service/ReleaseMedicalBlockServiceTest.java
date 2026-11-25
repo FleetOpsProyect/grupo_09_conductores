@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
@@ -23,15 +22,18 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
-import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+/**
+ * The repository is mocked: it hands the service's change the driver it "read" inside the transaction, and
+ * the test keeps the outbox event the change returned.
+ */
 @ExtendWith(MockitoExtension.class)
 class ReleaseMedicalBlockServiceTest {
 
@@ -49,6 +51,9 @@ class ReleaseMedicalBlockServiceTest {
 
     private ReleaseMedicalBlockService service;
 
+    /** Event returned by the change the service passed to the repository. */
+    private OutboxEvent returnedEvent;
+
     @BeforeEach
     void setUp() {
         service = new ReleaseMedicalBlockService(repository, CLOCK);
@@ -56,127 +61,82 @@ class ReleaseMedicalBlockServiceTest {
 
     @Test
     void releaseWithMedicalBlockAndNoDocumentBlockLeavesActiveAndPublishesEvent() {
-        Driver driver = driverWithBlocks(false, true);
-        when(repository.findById(DRIVER_ID)).thenReturn(Optional.of(driver));
+        Driver stored = driverWithBlocks(false, true);
+        repositoryReads(stored, "Apto médico otorgado");
 
-        ReleaseMedicalBlock.Command command =
-                new ReleaseMedicalBlock.Command("Apto médico otorgado", CORRELATION_ID);
-        Driver result = service.release(DRIVER_ID, command);
+        Driver result = service.release(DRIVER_ID,
+                new ReleaseMedicalBlock.Command("Apto médico otorgado", CORRELATION_ID));
 
+        assertThat(result).isSameAs(stored);
         assertThat(result.getStatus()).isEqualTo(DriverStatus.ACTIVE);
         assertThat(result.isMedicalBlock()).isFalse();
         assertThat(result.isDocumentBlock()).isFalse();
         assertThat(result.getUpdatedAt()).isEqualTo(EXPECTED_NOW);
 
-        ArgumentCaptor<Driver> driverCaptor = ArgumentCaptor.forClass(Driver.class);
-        ArgumentCaptor<OutboxEvent> eventCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
-        verify(repository).saveMedicalRelease(
-                driverCaptor.capture(),
-                eq("Apto médico otorgado"),
-                eq(EXPECTED_NOW),
-                eventCaptor.capture());
-
-        assertThat(driverCaptor.getValue()).isSameAs(result);
-        OutboxEvent outboxEvent = eventCaptor.getValue();
-        assertThat(outboxEvent).isNotNull();
-        assertThat(outboxEvent.status()).isEqualTo(OutboxEvent.Status.PENDING);
-        assertThat(outboxEvent.attempts()).isZero();
-        assertThat(outboxEvent.envelope().eventId()).isNotNull();
-        assertThat(outboxEvent.envelope().eventType())
-                .isEqualTo(DriverEventType.DRIVER_ACTIVATED.value());
-        assertThat(outboxEvent.envelope().occurredAt()).isEqualTo(EXPECTED_NOW);
-        assertThat(outboxEvent.envelope().source()).isEqualTo("driver");
-        assertThat(outboxEvent.envelope().correlationId()).isEqualTo(CORRELATION_ID);
-        assertThat(outboxEvent.envelope().data())
+        assertThat(returnedEvent).isNotNull();
+        assertThat(returnedEvent.status()).isEqualTo(OutboxEvent.Status.PENDING);
+        assertThat(returnedEvent.attempts()).isZero();
+        assertThat(returnedEvent.envelope().eventId()).isNotNull();
+        assertThat(returnedEvent.envelope().eventType()).isEqualTo(DriverEventType.DRIVER_ACTIVATED.value());
+        assertThat(returnedEvent.envelope().occurredAt()).isEqualTo(EXPECTED_NOW);
+        assertThat(returnedEvent.envelope().source()).isEqualTo("driver");
+        assertThat(returnedEvent.envelope().correlationId()).isEqualTo(CORRELATION_ID);
+        assertThat(returnedEvent.envelope().data())
                 .isEqualTo(new DriverActivatedPayload(result.getId(), result.getFullName()));
 
-        verify(repository).findById(DRIVER_ID);
+        verify(repository).releaseMedical(eq(DRIVER_ID), eq("Apto médico otorgado"), eq(EXPECTED_NOW), any());
         verifyNoMoreInteractions(repository);
     }
 
     @Test
     void releaseWithMedicalBlockAndDocumentBlockLeavesInactiveAndDoesNotPublishEvent() {
-        Driver driver = driverWithBlocks(true, true);
-        when(repository.findById(DRIVER_ID)).thenReturn(Optional.of(driver));
+        Driver stored = driverWithBlocks(true, true);
+        repositoryReads(stored, "Documentos aún vencidos");
 
-        ReleaseMedicalBlock.Command command =
-                new ReleaseMedicalBlock.Command("Documentos aún vencidos", CORRELATION_ID);
-        Driver result = service.release(DRIVER_ID, command);
+        Driver result = service.release(DRIVER_ID,
+                new ReleaseMedicalBlock.Command("Documentos aún vencidos", CORRELATION_ID));
 
         assertThat(result.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
         assertThat(result.isMedicalBlock()).isFalse();
         assertThat(result.isDocumentBlock()).isTrue();
         assertThat(result.getUpdatedAt()).isEqualTo(EXPECTED_NOW);
-
-        verify(repository).saveMedicalRelease(
-                eq(result),
-                eq("Documentos aún vencidos"),
-                eq(EXPECTED_NOW),
-                isNull());
-
-        verify(repository).findById(DRIVER_ID);
-        verifyNoMoreInteractions(repository);
+        assertThat(returnedEvent).isNull();
     }
 
     @Test
-    void releaseWithoutMedicalBlockThrowsStatusNotAllowedAndDoesNotSave() {
-        Driver driver = driverWithBlocks(false, false);
-        when(repository.findById(DRIVER_ID)).thenReturn(Optional.of(driver));
+    void releaseWithoutMedicalBlockThrowsStatusNotAllowedWithoutChangingTheDriver() {
+        Driver stored = driverWithBlocks(false, false);
+        repositoryReads(stored, "Notas");
 
-        ReleaseMedicalBlock.Command command =
-                new ReleaseMedicalBlock.Command("Notas", CORRELATION_ID);
-
-        assertThatThrownBy(() -> service.release(DRIVER_ID, command))
+        assertThatThrownBy(() -> service.release(DRIVER_ID, new ReleaseMedicalBlock.Command("Notas", CORRELATION_ID)))
                 .isInstanceOf(StatusNotAllowedException.class)
                 .hasMessage("El conductor no está inhabilitado por incidente");
 
-        assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
-        assertThat(driver.isMedicalBlock()).isFalse();
-
-        verify(repository).findById(DRIVER_ID);
-        verify(repository, never()).saveMedicalRelease(any(), any(), any(), any());
-        verifyNoMoreInteractions(repository);
+        assertThat(stored.getStatus()).isEqualTo(DriverStatus.ACTIVE);
+        assertThat(stored.isMedicalBlock()).isFalse();
     }
 
     @Test
-    void releaseWithNonExistentDriverThrowsDriverNotFound() {
-        when(repository.findById(DRIVER_ID)).thenReturn(Optional.empty());
+    void releaseWithNonExistentDriverPropagatesDriverNotFound() {
+        when(repository.releaseMedical(eq(DRIVER_ID), any(), any(), any()))
+                .thenThrow(new DriverNotFoundException(DRIVER_ID));
 
-        ReleaseMedicalBlock.Command command =
-                new ReleaseMedicalBlock.Command("Notas", CORRELATION_ID);
-
-        assertThatThrownBy(() -> service.release(DRIVER_ID, command))
+        assertThatThrownBy(() -> service.release(DRIVER_ID, new ReleaseMedicalBlock.Command("Notas", CORRELATION_ID)))
                 .isInstanceOf(DriverNotFoundException.class)
                 .hasMessageContaining(DRIVER_ID.toString());
-
-        verify(repository).findById(DRIVER_ID);
-        verify(repository, never()).saveMedicalRelease(any(), any(), any(), any());
-        verifyNoMoreInteractions(repository);
     }
 
     @Test
     void releaseWithNullNotesAndNullCorrelationIdGeneratesDefaults() {
-        Driver driver = driverWithBlocks(false, true);
-        when(repository.findById(DRIVER_ID)).thenReturn(Optional.of(driver));
+        Driver stored = driverWithBlocks(false, true);
+        when(repository.releaseMedical(eq(DRIVER_ID), isNull(), eq(EXPECTED_NOW), any()))
+                .thenAnswer(invocation -> applyChange(invocation.getArgument(3), stored));
 
-        ReleaseMedicalBlock.Command command = new ReleaseMedicalBlock.Command(null, null);
-        Driver result = service.release(DRIVER_ID, command);
+        Driver result = service.release(DRIVER_ID, new ReleaseMedicalBlock.Command(null, null));
 
         assertThat(result.getStatus()).isEqualTo(DriverStatus.ACTIVE);
-
-        ArgumentCaptor<OutboxEvent> eventCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
-        verify(repository).saveMedicalRelease(
-                eq(result),
-                isNull(),
-                eq(EXPECTED_NOW),
-                eventCaptor.capture());
-
-        OutboxEvent outboxEvent = eventCaptor.getValue();
-        assertThat(outboxEvent).isNotNull();
-        assertThat(outboxEvent.envelope().correlationId()).isNotNull();
-
-        verify(repository).findById(DRIVER_ID);
-        verifyNoMoreInteractions(repository);
+        assertThat(returnedEvent).isNotNull();
+        assertThat(returnedEvent.envelope().correlationId()).isNotNull();
     }
 
     @Test
@@ -184,6 +144,17 @@ class ReleaseMedicalBlockServiceTest {
         ReleaseMedicalBlock.Command command = new ReleaseMedicalBlock.Command("Nota simple");
         assertThat(command.notes()).isEqualTo("Nota simple");
         assertThat(command.correlationId()).isNotNull();
+    }
+
+    /** Makes the repository apply the service's change to {@code stored}, as the transaction would. */
+    private void repositoryReads(Driver stored, String notes) {
+        when(repository.releaseMedical(eq(DRIVER_ID), eq(notes), eq(EXPECTED_NOW), any()))
+                .thenAnswer(invocation -> applyChange(invocation.getArgument(3), stored));
+    }
+
+    private Driver applyChange(Function<Driver, OutboxEvent> change, Driver stored) {
+        returnedEvent = change.apply(stored);
+        return stored;
     }
 
     private static Driver driverWithBlocks(boolean documentBlock, boolean medicalBlock) {

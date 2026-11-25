@@ -38,6 +38,22 @@ final class DriverDocument {
     }
 
     /**
+     * Campos que cambia la modificación de un conductor (HU-08): los datos editables y updated_at. No
+     * incluye status ni los bloqueos, para no pisar los que haya aplicado el consumidor.
+     *
+     * @param driver conductor del dominio con los datos nuevos
+     * @return campos a actualizar en Firestore
+     */
+    static Map<String, Object> editableFields(Driver driver) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("full_name", driver.getFullName());
+        data.put("email", driver.getEmail());
+        data.put("phone", driver.getPhone());
+        data.put("updated_at", driver.getUpdatedAt().toString());
+        return data;
+    }
+
+    /**
      * Convierte un conductor del dominio incluyendo notas y fecha de alta médica.
      *
      * @param driver conductor del dominio
