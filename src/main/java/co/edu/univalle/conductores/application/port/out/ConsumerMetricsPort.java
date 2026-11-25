@@ -9,7 +9,7 @@ public interface ConsumerMetricsPort {
      * Registra un evento consumido con su resultado.
      *
      * @param eventType tipo de evento (ej. document_expired_event)
-     * @param result resultado del procesamiento: "processed" o "duplicate"
+     * @param result resultado del procesamiento: "processed", "duplicate" o "ignored" (no es de un conductor)
      */
     void recordConsumed(String eventType, String result);
 

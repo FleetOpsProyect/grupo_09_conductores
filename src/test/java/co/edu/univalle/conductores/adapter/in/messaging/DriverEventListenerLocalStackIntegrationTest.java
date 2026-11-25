@@ -193,7 +193,16 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         envelope.put("occurred_at", "2026-11-15T10:00:00-05:00");
         envelope.put("source", "documents");
         envelope.put("correlation_id", UUID.randomUUID().toString());
-        envelope.putObject("data").put("driver_id", driverId.toString());
+        if (EXPIRED.equals(eventType)) {
+            envelope.putObject("data")
+                    .put("document_id", UUID.randomUUID().toString())
+                    .put("document_type", "DRIVER_LICENSE")
+                    .put("owner_type", "DRIVER")
+                    .put("owner_id", driverId.toString())
+                    .put("expiration_date", "2026-11-10");
+        } else {
+            envelope.putObject("data").put("driver_id", driverId.toString());
+        }
         return envelope.toString();
     }
 

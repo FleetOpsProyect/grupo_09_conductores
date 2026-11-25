@@ -18,10 +18,6 @@ import java.util.function.Consumer;
  */
 public class ProcessDriverEventService implements ProcessDriverEvent {
 
-    public static final String DOCUMENT_EXPIRED_EVENT = "document_expired_event";
-    public static final String DOCUMENT_RENEWED_EVENT = "document_renewed_event";
-    public static final String SEVERE_INCIDENT_REPORTED_EVENT = "severe_incident_reported_event";
-
     private final ProcessedEventRepositoryPort processedEventRepository;
     private final ConsumerMetricsPort consumerMetrics;
     private final Clock clock;

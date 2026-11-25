@@ -192,7 +192,7 @@ En `/metrics`, las métricas de eventos son:
 - `drivers_outbox_pending`: eventos que siguen pendientes en Firestore.
 
 **Consumo SQS:**
-- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed` o `duplicate`.
+- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed`, `duplicate` o `ignored` (documento que no es de un conductor).
 - `drivers_events_dlq_total{event_type, reason}`: eventos enviados o derivados a la DLQ con `reason = invalid_message`, `driver_not_found` o `max_retries`.
 
 ### Publicador del outbox
@@ -218,13 +218,16 @@ de documentación e incidentes). Procesa:
 - `severe_incident_reported_event`: aplica bloqueo médico (`MEDICAL_HOLD_INCIDENT`).
 
 Acepta el mensaje tal cual o envuelto en la notificación de SNS, y valida el sobre estándar:
-`event_id` y `correlation_id` (UUID), `event_type`, `source`, `occurred_at` (ISO 8601 con offset)
-y `data.driver_id` (UUID). Los campos adicionales se ignoran.
+`event_id` y `correlation_id` (UUID), `event_type`, `source` y `occurred_at` (ISO 8601 con offset o `Z`).
+En `data`, `document_expired_event` debe traer `document_id`, `document_type`, `owner_type`, `owner_id`
+y `expiration_date`, y el conductor es `owner_id` (UUID); los otros dos eventos traen `driver_id` (UUID).
+Los campos adicionales se ignoran.
 
 | Caso | Qué hace | Log | Métrica |
 | :--- | :--- | :--- | :--- |
 | Evento válido | Cambia el estado del conductor y confirma el mensaje. | — | `drivers_events_consumed_total{result="processed"}` |
 | `event_id` ya procesado | Confirma el mensaje sin cambios. | — | `drivers_events_consumed_total{result="duplicate"}` |
+| Documento que no es de un conductor (`owner_type` distinto de `DRIVER`) | Confirma el mensaje sin cambios, sin filtrar por `document_type`. | DEBUG | `drivers_events_consumed_total{result="ignored"}` |
 | JSON inválido, campo faltante o `event_type` desconocido | Lo envía a la DLQ sin reintentos, con los atributos `event_type` y `reason`. | ERROR con `event_id` y el motivo | `drivers_events_dlq_total{reason="invalid_message"}` |
 | Conductor inexistente | Lo envía a la DLQ sin reintentos. | WARN | `drivers_events_dlq_total{reason="driver_not_found"}` |
 | Firestore no responde | No confirma el mensaje; SQS lo reentrega y, al 3.er intento fallido, la redrive policy (`maxReceiveCount = 3`) lo mueve a la DLQ. | ERROR en el 3.er intento | `drivers_events_dlq_total{reason="max_retries"}` |
