@@ -441,6 +441,29 @@ class DriverEventListenerTest {
     }
 
     @Test
+    void logsOwnerIdAndDocumentIdAtInfoWhenTheDocumentBlockIsRemoved() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+
+        listener.onMessage(renewedEnvelope().toString(), "1");
+
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage())
+                    .contains("owner_id=" + DRIVER_ID)
+                    .contains("document_id=019a3b10-2c4d-7e5f-8a6b-7c8d9e0f1a2b");
+        });
+    }
+
+    @Test
+    void doesNotLogTheRemovalWhenTheDriverHadNoDocumentBlock() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED_WITHOUT_CHANGE);
+
+        listener.onMessage(renewedEnvelope().toString(), "1");
+
+        assertThat(logs.list).isEmpty();
+    }
+
+    @Test
     void doesNotLogTheBlockAgainForADuplicateEvent() {
         when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.DUPLICATE);
 

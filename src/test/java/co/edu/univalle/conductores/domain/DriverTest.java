@@ -198,6 +198,19 @@ class DriverTest {
     }
 
     @Test
+    void removeDocumentBlockReportsWhetherABlockWasRemoved() {
+        Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", null, NOW);
+        driver.applyDocumentBlock(NOW.plusHours(1));
+        OffsetDateTime renewedAt = NOW.plusHours(2);
+
+        assertThat(driver.removeDocumentBlock(renewedAt)).isTrue();
+        assertThat(driver.getUpdatedAt()).isEqualTo(renewedAt);
+
+        assertThat(driver.removeDocumentBlock(NOW.plusHours(3))).isFalse();
+        assertThat(driver.getUpdatedAt()).isEqualTo(renewedAt);
+    }
+
+    @Test
     void applyMedicalBlockChangesStatusToMedicalHold() {
         Driver driver = Driver.register("Carlos Pérez", "1144056789", "carlos@correo.com", null, NOW);
         OffsetDateTime later = NOW.plusHours(1);

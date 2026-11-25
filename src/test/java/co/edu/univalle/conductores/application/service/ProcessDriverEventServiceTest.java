@@ -138,6 +138,20 @@ class ProcessDriverEventServiceTest {
     }
 
     @Test
+    void renewedEventWithoutDocumentBlockReturnsProcessedWithoutChange() {
+        Driver driver = repository.add(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez", "carlos@correo.com",
+                null, false, false, NOW, NOW));
+
+        EventProcessingResult result = service.process(command(ProcessDriverEventService.DOCUMENT_RENEWED_EVENT,
+                NOW.plusHours(2)));
+
+        assertThat(result).isEqualTo(EventProcessingResult.PROCESSED_WITHOUT_CHANGE);
+        assertThat(driver.getUpdatedAt()).isEqualTo(NOW);
+        assertThat(repository.outbox).isNull();
+        verify(consumerMetrics).recordConsumed(ProcessDriverEventService.DOCUMENT_RENEWED_EVENT, "processed");
+    }
+
+    @Test
     void processesSevereIncidentReportedEventAndAppliesMedicalBlock() {
         Driver driver = repository.add(activeDriver());
         OffsetDateTime incidentAt = NOW.plusHours(1);
