@@ -250,11 +250,7 @@ public class DriverController {
         @ApiResponse(responseCode = "200", description = "Conductor actualizado"),
         @ApiResponse(responseCode = "400",
             description = """
-                INVALID_DATA: uno o más campos no cumplen su regla (REQUIRED si falta un campo \
-                obligatorio); errors trae un elemento por cada campo inválido. Si document_number \
-                llega con un valor distinto al guardado, errors trae también \
-                {"field": "document_number", "code": "NOT_EDITABLE"}. INVALID_JSON: el \
-                cuerpo no es un JSON válido.""",
+                INVALID_DATA: uno o más campos no cumplen su regla (REQUIRED si falta un campo obligatorio); errors trae un elemento por cada campo inválido. Si la cedula llega con un valor distinto al que ya existe errors trae también {"field": "document_number", "code": "NOT_EDITABLE"}. INVALID_JSON: el cuerpo no es un JSON válido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),

@@ -5,7 +5,8 @@ package co.edu.univalle.conductores.application.event;
  */
 public enum DriverEventType {
     DRIVER_ACTIVATED("driver_activated_event"),
-    DRIVER_UPDATED("driver_updated_event");
+    DRIVER_UPDATED("driver_updated_event"),
+    DRIVER_BLOCKED("driver_blocked_event");
 
     private final String value;
 

@@ -18,8 +18,6 @@ final class ValidationErrorCodes {
     static final String INVALID_FORMAT = "INVALID_FORMAT";
     static final String VALUE_NOT_ALLOWED = "VALUE_NOT_ALLOWED";
     static final String NOT_EDITABLE = "NOT_EDITABLE";
-
-    /** Error code the controller adds to the binding result for a non-editable field that changes. */
     static final String NOT_EDITABLE_RULE = "NotEditable";
 
     /** When a field fails several rules, the code listed first wins. */

@@ -38,7 +38,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -200,13 +199,13 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
     }
 
     /**
-     * Applies a consumed event once. The processed_events check, the driver change and the
-     * processed_events record run in one transaction, so two deliveries of the same event cannot both
-     * change the driver.
+     * Applies a consumed event once. The processed_events check, the driver change, the
+     * processed_events record and the outbox event returned by {@code change}, if any, run in one
+     * transaction, so two deliveries of the same event cannot both change the driver or publish twice.
      */
     @Override
-    public boolean applyOnce(
-            UUID eventId, String eventType, UUID driverId, Instant processedAt, Consumer<Driver> change) {
+    public boolean applyOnce(UUID eventId, String eventType, UUID driverId, Instant processedAt,
+            Function<Driver, OutboxEvent> change) {
         DocumentReference processedRef = firestore.collection(ProcessedEventDocument.COLLECTION)
                 .document(eventId.toString());
         DocumentReference driverRef = drivers().document(driverId.toString());
@@ -221,11 +220,16 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
             }
 
             Driver driver = DriverDocument.toDomain(driverSnapshot.getData());
-            change.accept(driver);
+            OutboxEvent outboxEvent = change.apply(driver);
 
             // merge: keeps medical_release_notes and medical_released_at, which the domain does not carry.
             transaction.set(driverRef, DriverDocument.fromDomain(driver), SetOptions.merge());
             transaction.set(processedRef, ProcessedEventDocument.of(eventId, eventType, driverId, processedAt));
+            if (outboxEvent != null) {
+                DocumentReference outboxRef = firestore.collection(OutboxEventDocument.COLLECTION)
+                        .document(outboxEvent.envelope().eventId().toString());
+                transaction.set(outboxRef, OutboxEventDocument.fromDomain(outboxEvent, jsonMapper));
+            }
             return true;
         }));
     }

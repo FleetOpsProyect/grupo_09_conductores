@@ -192,13 +192,14 @@ En `/metrics`, las métricas de eventos son:
 - `drivers_outbox_pending`: eventos que siguen pendientes en Firestore.
 
 **Consumo SQS:**
-- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed`, `duplicate` o `ignored` (documento que no es de un conductor).
+- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed`, `duplicate` o `ignored` (documento que no es de conductor, por ejemplo, evento que iba dirigido a vehículs).
 - `drivers_events_dlq_total{event_type, reason}`: eventos enviados o derivados a la DLQ con `reason = invalid_message`, `driver_not_found` o `max_retries`.
 
 ### Publicador del outbox
 
-El registro de un conductor, el alta médica y la modificación de sus datos (`driver_updated_event`, solo si
-algún campo cambia) guardan el evento en `outbox_events` en la misma
+El registro de un conductor, el alta médica, la modificación de sus datos (`driver_updated_event`, solo si
+algún campo cambia) y el vencimiento de su licencia (`driver_blocked_event`, solo si estaba `ACTIVE`; lo
+guarda el consumidor junto con `processed_events`) guardan el evento en `outbox_events` en la misma
 transacción de Firestore, con estado `PENDING`, y responde sin esperar a SNS. Un proceso programado,
 cada `OUTBOX_PUBLISH_INTERVAL_MS` (2 s), lee hasta `OUTBOX_BATCH_SIZE` eventos `PENDING` en orden de
 `created_at`, los publica en `fleetops_driver_events` con el message attribute `event_type` y los marca
