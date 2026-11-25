@@ -25,9 +25,10 @@ import tools.jackson.databind.json.JsonMapper;
  * Consumidor SQS que escucha eventos de fleetops_driver_queue.
  *
  * <p>Valida el sobre estándar {@code {event_id, event_type, occurred_at, source, correlation_id, data}}
- * y los campos de {@code data} que exige cada tipo de evento: {@code document_expired_event} trae
- * {@code document_id, document_type, owner_type, owner_id, expiration_date} y solo afecta a conductores
- * ({@code owner_type = DRIVER}); los demás tipos traen {@code driver_id}. Un mensaje inválido o con tipo
+ * y los campos de {@code data} que exige cada tipo de evento: {@code document_expired_event} y
+ * {@code document_renewed_event} traen {@code document_id, document_type, owner_type, owner_id}; solo el
+ * primero exige {@code expiration_date}. Ambos afectan solo a conductores ({@code owner_type = DRIVER}),
+ * y los demás tipos traen {@code driver_id}. Un mensaje inválido o con tipo
  * desconocido va a la DLQ sin reintentos, con log ERROR. Si falla la persistencia, la excepción se relanza
  * para que SQS reintente; al tercer intento la redrive policy lo mueve a la DLQ.
  */
@@ -131,7 +132,9 @@ public class DriverEventListener {
 
     /** Name of the field the driver id came from, to log it as the publisher sent it. */
     private static String driverIdField(String eventType) {
-        return ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType) ? "owner_id" : "driver_id";
+        boolean document = ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType)
+                || ProcessDriverEvent.DOCUMENT_RENEWED_EVENT.equals(eventType);
+        return document ? "owner_id" : "driver_id";
     }
 
     /**
@@ -148,23 +151,33 @@ public class DriverEventListener {
         if (data == null || !data.isObject()) {
             throw new IllegalArgumentException("Falta el campo obligatorio data");
         }
-        UUID driverId = ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType)
-                ? documentOwnerDriverId(data)
-                : requiredUuid(data, "driver_id");
+        UUID driverId;
+        if (ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType)) {
+            driverId = documentOwnerDriverId(data, true);
+        } else if (ProcessDriverEvent.DOCUMENT_RENEWED_EVENT.equals(eventType)) {
+            driverId = documentOwnerDriverId(data, false);
+        } else {
+            driverId = requiredUuid(data, "driver_id");
+        }
         return driverId == null ? null : new Command(eventId, eventType, driverId, occurredAt, correlationId);
     }
 
     /**
-     * Validates the data of a Documentación event (HU-04 c2) and returns the driver it belongs to, or null
-     * when owner_type is not DRIVER. Every document field is required whatever the owner; document_type is
-     * not filtered (c3).
+     * Validates the data of a Documentación event (HU-04 c2, HU-05 c2) and returns the driver it belongs to,
+     * or null when owner_type is not DRIVER. The document fields are required whatever the owner; document_type
+     * is not filtered (c3). Only document_expired_event requires expiration_date.
+     *
+     * @param data               data object of the event
+     * @param requiresExpiration true for document_expired_event, false for document_renewed_event
      */
-    private static UUID documentOwnerDriverId(JsonNode data) {
+    private static UUID documentOwnerDriverId(JsonNode data, boolean requiresExpiration) {
         requiredText(data, "document_id");
         requiredText(data, "document_type");
         String ownerType = requiredText(data, "owner_type");
         requiredText(data, "owner_id");
-        requiredText(data, "expiration_date");
+        if (requiresExpiration) {
+            requiredText(data, "expiration_date");
+        }
         return DRIVER_OWNER.equals(ownerType) ? requiredUuid(data, "owner_id") : null;
     }
 
