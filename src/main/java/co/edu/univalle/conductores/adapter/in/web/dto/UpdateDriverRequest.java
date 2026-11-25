@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.adapter.in.web.dto;
 
+import co.edu.univalle.conductores.domain.Driver;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
@@ -23,7 +24,7 @@ public class UpdateDriverRequest {
     private String fullName;
 
     @NotBlank
-    @Pattern(regexp = "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+    @Pattern(regexp = Driver.EMAIL_REGEX)
     @Size(max = 100)
     @Schema(description = "Correo con formato usuario@dominio.ext, máximo 100 caracteres.",
             requiredMode = Schema.RequiredMode.REQUIRED)

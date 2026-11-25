@@ -14,7 +14,14 @@ public class Driver {
 
     private static final Pattern DOCUMENT_NUMBER_PATTERN = Pattern.compile("^[0-9]{6,10}$");
     private static final Pattern PHONE_PATTERN = Pattern.compile("^3[0-9]{9}$");
-    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    /**
+     * Email with the form user@domain.ext. The first domain part ends at the first dot, so there is only
+     * one way to split the text and the check takes linear time (no ReDoS); it has no repeated groups,
+     * which Java resolves with recursion. The web DTOs use it in their {@code @Pattern}.
+     */
+    public static final String EMAIL_REGEX = "^[^@\\s]++@[^@\\s.]++\\.[^@\\s]++$";
+
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(EMAIL_REGEX);
     private static final int MAX_EMAIL_LENGTH = 100;
 
     private final UUID id;

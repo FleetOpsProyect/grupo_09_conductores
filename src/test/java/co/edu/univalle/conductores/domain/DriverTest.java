@@ -2,7 +2,9 @@ package co.edu.univalle.conductores.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -89,6 +91,30 @@ class DriverTest {
         Driver driver = Driver.register("Carlos Pérez", "1144056789", "ana@x.c", null, NOW);
 
         assertThat(driver.getEmail()).isEqualTo("ana@x.c");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"carlos@correo.com", "ana@univalle.edu.co", "carlos.perez+fleet@mi-correo.com"})
+    void emailRegexAcceptsUsualEmails(String email) {
+        assertThat(email).matches(Driver.EMAIL_REGEX);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"carlos@correo", "carlos@.com", "carlos@@correo.com", "carlos @correo.com",
+        "carlos@correo.com "})
+    void emailRegexRejectsMalformedEmails(String email) {
+        assertThat(email).doesNotMatch(Driver.EMAIL_REGEX);
+    }
+
+    @Test
+    void emailRegexTakesLinearTimeOnLongInputs() {
+        String manyDots = "a@b" + ".".repeat(50_000) + " ";
+        String manyParts = "a@" + "b.".repeat(25_000) + " ";
+
+        assertTimeoutPreemptively(Duration.ofSeconds(1), () -> {
+            assertThat(manyDots).doesNotMatch(Driver.EMAIL_REGEX);
+            assertThat(manyParts).doesNotMatch(Driver.EMAIL_REGEX);
+        });
     }
 
     @Test
