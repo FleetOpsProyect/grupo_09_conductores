@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.application.service;
 
+import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
 import co.edu.univalle.conductores.application.event.DriverBlockedPayload;
 import co.edu.univalle.conductores.application.event.DriverEventType;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
@@ -76,8 +77,10 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
             };
             case DOCUMENT_RENEWED_EVENT -> driver -> {
                 // The transaction may run this change more than once; the last run is the one committed.
+                boolean wasBlocked = driver.getStatus() != DriverStatus.ACTIVE;
                 changed.set(driver.removeDocumentBlock(occurredAt));
-                return null;
+                boolean reactivated = wasBlocked && driver.getStatus() == DriverStatus.ACTIVE;
+                return reactivated ? activatedEvent(driver, command.correlationId()) : null;
             };
             case SEVERE_INCIDENT_REPORTED_EVENT -> driver -> {
                 driver.applyMedicalBlock(occurredAt);
@@ -91,13 +94,27 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
      * driver_blocked_event for a driver that stopped being ACTIVE, with the correlation_id of the consumed event.
      */
     private OutboxEvent blockedEvent(Driver driver, UUID correlationId) {
-        EventEnvelope<DriverBlockedPayload> envelope = new EventEnvelope<>(
+        return pendingEvent(DriverEventType.DRIVER_BLOCKED,
+                new DriverBlockedPayload(driver.getId(), driver.getFullName()), correlationId);
+    }
+
+    /**
+     * driver_activated_event for a driver that is ACTIVE again after a document renewal, with the correlation_id
+     * of the consumed event.
+     */
+    private OutboxEvent activatedEvent(Driver driver, UUID correlationId) {
+        return pendingEvent(DriverEventType.DRIVER_ACTIVATED,
+                new DriverActivatedPayload(driver.getId(), driver.getFullName()), correlationId);
+    }
+
+    private <T> OutboxEvent pendingEvent(DriverEventType type, T payload, UUID correlationId) {
+        EventEnvelope<T> envelope = new EventEnvelope<>(
                 UUID.randomUUID(),
-                DriverEventType.DRIVER_BLOCKED.value(),
+                type.value(),
                 OffsetDateTime.now(clock),
                 "driver",
                 correlationId,
-                new DriverBlockedPayload(driver.getId(), driver.getFullName()));
+                payload);
         return OutboxEvent.pending(envelope);
     }
 }
