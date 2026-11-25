@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
 import co.edu.univalle.conductores.application.event.DriverBlockedPayload;
 import co.edu.univalle.conductores.application.event.DriverEventType;
 import co.edu.univalle.conductores.application.event.OutboxEvent;
@@ -133,8 +134,26 @@ class ProcessDriverEventServiceTest {
         assertThat(driver.isDocumentBlock()).isFalse();
         assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
         assertThat(driver.getUpdatedAt()).isEqualTo(renewedAt);
-        assertThat(repository.outbox).isNull();
+        assertThat(repository.outbox).isNotNull();
+        assertThat(repository.outbox.envelope().eventType()).isEqualTo(DriverEventType.DRIVER_ACTIVATED.value());
+        assertThat(repository.outbox.envelope().correlationId()).isEqualTo(CORRELATION_ID);
+        assertThat(repository.outbox.envelope().data())
+                .isEqualTo(new DriverActivatedPayload(DRIVER_ID, driver.getFullName()));
         verify(consumerMetrics).recordConsumed(ProcessDriverEventService.DOCUMENT_RENEWED_EVENT, "processed");
+    }
+
+    @Test
+    void renewedEventWithMedicalHoldKeepsTheHoldAndStoresNoEvent() {
+        Driver driver = repository.add(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez", "carlos@correo.com",
+                null, true, true, NOW, NOW));
+
+        EventProcessingResult result = service.process(command(ProcessDriverEventService.DOCUMENT_RENEWED_EVENT,
+                NOW.plusHours(2)));
+
+        assertThat(result).isEqualTo(EventProcessingResult.PROCESSED);
+        assertThat(driver.isDocumentBlock()).isFalse();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+        assertThat(repository.outbox).isNull();
     }
 
     @Test
