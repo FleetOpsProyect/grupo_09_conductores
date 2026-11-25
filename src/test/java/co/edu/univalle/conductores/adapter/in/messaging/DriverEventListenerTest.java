@@ -424,6 +424,22 @@ class DriverEventListenerTest {
     }
 
     @Test
+    void logsOwnerIdAndEventIdAtWarnWhenTheRenewedDocumentOwnerDoesNotExist() {
+        String payload = renewedEnvelope().toString();
+        doThrow(new DriverNotFoundException(DRIVER_ID)).when(processDriverEvent).process(any());
+
+        listener.onMessage(payload, "1");
+
+        verify(dlqSender).sendToDlq(payload, RENEWED, "driver_not_found");
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                    .contains("owner_id=" + DRIVER_ID)
+                    .contains("event_id=" + EVENT_ID);
+        });
+    }
+
+    @Test
     void logsOwnerIdAndDocumentIdAtInfoWhenTheBlockIsApplied() {
         when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
 
