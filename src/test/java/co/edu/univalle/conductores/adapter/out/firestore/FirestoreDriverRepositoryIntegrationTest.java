@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import co.edu.univalle.conductores.BaseIntegrationTest;
 import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
+import co.edu.univalle.conductores.application.event.DriverBlockedPayload;
 import co.edu.univalle.conductores.application.event.DriverEventType;
 import co.edu.univalle.conductores.application.event.DriverUpdatedPayload;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
@@ -17,6 +18,7 @@ import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.PageResult;
+import co.edu.univalle.conductores.domain.StatusNotAllowedException;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
 import java.time.Duration;
@@ -24,6 +26,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -160,7 +163,7 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
         Instant processedAt = Instant.parse("2026-11-15T12:00:00Z");
 
         boolean applied = processedEventRepository.applyOnce(eventId, "document_expired_event", driver.getId(),
-                processedAt, d -> d.applyDocumentBlock(NOW.plusHours(1)));
+                processedAt, d -> block(d, NOW.plusHours(1)));
 
         assertThat(applied).isTrue();
         assertThat(repository.findById(driver.getId()).orElseThrow().getStatus())
@@ -177,16 +180,56 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
+    void storesTheOutboxEventReturnedByTheChangeInTheSameTransaction() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        UUID eventId = UUID.randomUUID();
+        OutboxEvent blocked = pendingBlockedEvent(driver);
+
+        processedEventRepository.applyOnce(eventId, "document_expired_event", driver.getId(), Instant.now(), d -> {
+            d.applyDocumentBlock(NOW.plusHours(1));
+            return blocked;
+        });
+
+        DocumentSnapshot outbox = firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(blocked.envelope().eventId().toString()).get().get();
+        assertThat(outbox.exists()).isTrue();
+        assertThat(outbox.getString(OutboxEventDocument.EVENT_TYPE)).isEqualTo(DriverEventType.DRIVER_BLOCKED.value());
+        assertThat(outbox.getString(OutboxEventDocument.STATUS)).isEqualTo(OutboxEventDocument.STATUS_PENDING);
+        assertThat(driverDocument(driver).getString("status")).isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+    }
+
+    @Test
+    void doesNotStoreTheOutboxEventOfADuplicateDelivery() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        UUID eventId = UUID.randomUUID();
+        processedEventRepository.applyOnce(eventId, "document_expired_event", driver.getId(), Instant.now(),
+                d -> block(d, NOW.plusHours(1)));
+        OutboxEvent second = pendingBlockedEvent(driver);
+
+        boolean applied = processedEventRepository.applyOnce(eventId, "document_expired_event", driver.getId(),
+                Instant.now(), d -> second);
+
+        assertThat(applied).isFalse();
+        assertThat(firestore.collection(OutboxEventDocument.COLLECTION)
+                .document(second.envelope().eventId().toString()).get().get().exists()).isFalse();
+    }
+
+    @Test
     void doesNotApplyAnEventTwice() {
         Driver driver = newDriver(uniqueDocument(), false);
         createDriverWithOutbox(driver);
         UUID eventId = UUID.randomUUID();
         Instant processedAt = Instant.parse("2026-11-15T12:00:00Z");
         processedEventRepository.applyOnce(eventId, "document_expired_event", driver.getId(), processedAt,
-                d -> d.applyDocumentBlock(NOW.plusHours(1)));
+                d -> block(d, NOW.plusHours(1)));
 
         boolean appliedAgain = processedEventRepository.applyOnce(eventId, "document_expired_event",
-                driver.getId(), processedAt, d -> d.removeDocumentBlock(NOW.plusHours(2)));
+                driver.getId(), processedAt, d -> {
+                    d.removeDocumentBlock(NOW.plusHours(2));
+                    return null;
+                });
 
         assertThat(appliedAgain).isFalse();
         assertThat(repository.findById(driver.getId()).orElseThrow().getStatus())
@@ -199,7 +242,7 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
         UUID missingDriver = UUID.randomUUID();
 
         assertThatThrownBy(() -> processedEventRepository.applyOnce(eventId, "document_expired_event",
-                missingDriver, Instant.now(), d -> d.applyDocumentBlock(NOW)))
+                missingDriver, Instant.now(), d -> block(d, NOW)))
                 .isInstanceOf(DriverNotFoundException.class);
 
         assertThat(firestore.collection(ProcessedEventDocument.COLLECTION)
@@ -207,67 +250,102 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void saveMedicalReleaseWithActiveDriverStoresNotesDateAndOutboxEvent() throws Exception {
+    void releaseMedicalWithActiveResultStoresNotesDateAndOutboxEvent() throws Exception {
         Driver driver = newDriver(uniqueDocument(), false);
         createDriverWithOutbox(driver);
-        driver.applyMedicalBlock(NOW.plusHours(1));
-        repository.save(driver);
+        applyEvent(driver, "severe_incident_reported_event", d -> d.applyMedicalBlock(NOW.plusHours(1)));
 
-        driver.releaseMedicalBlock(NOW.plusHours(2));
-        OutboxEvent outboxEvent = pendingActivationEvent(driver);
-        repository.saveMedicalRelease(driver, "Conductor recuperado", NOW.plusHours(2), outboxEvent);
+        OutboxEvent[] stored = new OutboxEvent[1];
+        Driver released = repository.releaseMedical(driver.getId(), "Conductor recuperado", NOW.plusHours(2), d -> {
+            stored[0] = releaseAndActivate(d, NOW.plusHours(2));
+            return stored[0];
+        });
 
+        assertThat(released.getStatus()).isEqualTo(DriverStatus.ACTIVE);
         Driver found = repository.findById(driver.getId()).orElseThrow();
         assertThat(found.getStatus()).isEqualTo(DriverStatus.ACTIVE);
         assertThat(found.isMedicalBlock()).isFalse();
 
-        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
-                .document(driver.getId().toString()).get().get();
+        DocumentSnapshot doc = driverDocument(driver);
         assertThat(doc.getString("medical_release_notes")).isEqualTo("Conductor recuperado");
         assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
 
         DocumentSnapshot outbox = firestore.collection(OutboxEventDocument.COLLECTION)
-                .document(outboxEvent.envelope().eventId().toString()).get().get();
+                .document(stored[0].envelope().eventId().toString()).get().get();
         assertThat(outbox.exists()).isTrue();
         assertThat(outbox.getString(OutboxEventDocument.EVENT_TYPE))
                 .isEqualTo(DriverEventType.DRIVER_ACTIVATED.value());
     }
 
     @Test
-    void saveMedicalReleaseWithDocumentBlockLeavesInactiveAndDoesNotStoreOutboxEvent() throws Exception {
-        Driver driver = newDriver(uniqueDocument(), true);
+    void releaseMedicalUsesTheDocumentBlockStoredWhenTheTransactionRuns() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
         createDriverWithOutbox(driver);
-        driver.applyMedicalBlock(NOW.plusHours(1));
-        repository.save(driver);
+        applyEvent(driver, "severe_incident_reported_event", d -> d.applyMedicalBlock(NOW.plusHours(1)));
+        Driver readBeforeTheBlock = repository.findById(driver.getId()).orElseThrow();
+        applyEvent(driver, "document_expired_event", d -> d.applyDocumentBlock(NOW.plusHours(2)));
+        long pendingBefore = outboxRepository.countPending();
 
-        driver.releaseMedicalBlock(NOW.plusHours(2));
-        repository.saveMedicalRelease(driver, "Apto médico", NOW.plusHours(2), null);
+        Driver released = repository.releaseMedical(driver.getId(), "Apto médico", NOW.plusHours(3),
+                d -> releaseAndActivate(d, NOW.plusHours(3)));
 
+        assertThat(readBeforeTheBlock.isDocumentBlock()).isFalse();
+        assertThat(released.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
         Driver found = repository.findById(driver.getId()).orElseThrow();
-        assertThat(found.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
-        assertThat(found.isMedicalBlock()).isFalse();
         assertThat(found.isDocumentBlock()).isTrue();
+        assertThat(found.isMedicalBlock()).isFalse();
+        assertThat(driverDocument(driver).getString("status")).isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+        assertThat(outboxRepository.countPending()).isEqualTo(pendingBefore);
+    }
 
-        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
-                .document(driver.getId().toString()).get().get();
-        assertThat(doc.getString("medical_release_notes")).isEqualTo("Apto médico");
+    @Test
+    void releaseMedicalWithoutNotesStoresNullNotesAndValidDate() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        applyEvent(driver, "severe_incident_reported_event", d -> d.applyMedicalBlock(NOW.plusHours(1)));
+
+        repository.releaseMedical(driver.getId(), null, NOW.plusHours(2), d -> releaseAndActivate(d, NOW.plusHours(2)));
+
+        DocumentSnapshot doc = driverDocument(driver);
+        assertThat(doc.getString("medical_release_notes")).isNull();
         assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
     }
 
     @Test
-    void saveMedicalReleaseWithoutNotesStoresNullNotesAndValidDate() throws Exception {
+    void releaseMedicalWithoutMedicalBlockThrowsStatusNotAllowedAndStoresNothing() throws Exception {
         Driver driver = newDriver(uniqueDocument(), false);
         createDriverWithOutbox(driver);
-        driver.applyMedicalBlock(NOW.plusHours(1));
-        repository.save(driver);
 
-        driver.releaseMedicalBlock(NOW.plusHours(2));
-        OutboxEvent outboxEvent = pendingActivationEvent(driver);
-        repository.saveMedicalRelease(driver, null, NOW.plusHours(2), outboxEvent);
+        assertThatThrownBy(() -> repository.releaseMedical(driver.getId(), "Notas", NOW.plusHours(1),
+                d -> releaseAndActivate(d, NOW.plusHours(1))))
+                .isInstanceOf(StatusNotAllowedException.class);
 
-        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
-                .document(driver.getId().toString()).get().get();
-        assertThat(doc.getString("medical_release_notes")).isNull();
+        DocumentSnapshot doc = driverDocument(driver);
+        assertThat(doc.contains("medical_release_notes")).isFalse();
+        assertThat(doc.getString("updated_at")).isEqualTo(driver.getUpdatedAt().toString());
+    }
+
+    @Test
+    void releaseMedicalThrowsDriverNotFoundWhenDriverDoesNotExist() {
+        UUID missingDriver = UUID.randomUUID();
+
+        assertThatThrownBy(() -> repository.releaseMedical(missingDriver, null, NOW, d -> null))
+                .isInstanceOf(DriverNotFoundException.class);
+    }
+
+    @Test
+    void applyOnceKeepsTheMedicalReleaseNotes() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        applyEvent(driver, "severe_incident_reported_event", d -> d.applyMedicalBlock(NOW.plusHours(1)));
+        repository.releaseMedical(driver.getId(), "Conductor recuperado", NOW.plusHours(2),
+                d -> releaseAndActivate(d, NOW.plusHours(2)));
+
+        applyEvent(driver, "document_expired_event", d -> d.applyDocumentBlock(NOW.plusHours(3)));
+
+        DocumentSnapshot doc = driverDocument(driver);
+        assertThat(doc.getString("status")).isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+        assertThat(doc.getString("medical_release_notes")).isEqualTo("Conductor recuperado");
         assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
     }
 
@@ -275,20 +353,14 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
     void updateWithOutboxStoresNewDataAndEventAndKeepsMedicalReleaseFields() throws Exception {
         Driver driver = newDriver(uniqueDocument(), false);
         createDriverWithOutbox(driver);
-        driver.applyMedicalBlock(NOW.plusHours(1));
-        repository.save(driver);
-        driver.releaseMedicalBlock(NOW.plusHours(2));
-        repository.saveMedicalRelease(driver, "Conductor recuperado", NOW.plusHours(2), null);
+        applyEvent(driver, "severe_incident_reported_event", d -> d.applyMedicalBlock(NOW.plusHours(1)));
+        repository.releaseMedical(driver.getId(), "Conductor recuperado", NOW.plusHours(2),
+                d -> releaseAndActivate(d, NOW.plusHours(2)));
 
-        driver.update("Nombre Actualizado", "nuevo@correo.com", "3159876543", NOW.plusHours(3));
-        EventEnvelope<DriverUpdatedPayload> envelope = new EventEnvelope<>(
-                UUID.randomUUID(),
-                DriverEventType.DRIVER_UPDATED.value(),
-                NOW.plusHours(3),
-                "driver",
-                UUID.randomUUID(),
-                new DriverUpdatedPayload(driver.getId(), driver.getFullName()));
-        repository.updateWithOutbox(driver, OutboxEvent.pending(envelope));
+        Driver current = repository.findById(driver.getId()).orElseThrow();
+        current.update("Nombre Actualizado", "nuevo@correo.com", "3159876543", NOW.plusHours(3));
+        OutboxEvent updated = pendingUpdateEvent(current);
+        repository.updateWithOutbox(current, updated);
 
         Driver found = repository.findById(driver.getId()).orElseThrow();
         assertThat(found.getFullName()).isEqualTo("Nombre Actualizado");
@@ -296,16 +368,79 @@ class FirestoreDriverRepositoryIntegrationTest extends BaseIntegrationTest {
         assertThat(found.getPhone()).isEqualTo("3159876543");
         assertThat(found.getStatus()).isEqualTo(DriverStatus.ACTIVE);
 
-        DocumentSnapshot doc = firestore.collection(DriverDocument.COLLECTION)
-                .document(driver.getId().toString()).get().get();
+        DocumentSnapshot doc = driverDocument(driver);
+        assertThat(doc.getString("updated_at")).isEqualTo(NOW.plusHours(3).toString());
         assertThat(doc.getString("medical_release_notes")).isEqualTo("Conductor recuperado");
         assertThat(doc.getString("medical_released_at")).isEqualTo(NOW.plusHours(2).toString());
 
         DocumentSnapshot outbox = firestore.collection(OutboxEventDocument.COLLECTION)
-                .document(envelope.eventId().toString()).get().get();
+                .document(updated.envelope().eventId().toString()).get().get();
         assertThat(outbox.exists()).isTrue();
         assertThat(outbox.getString(OutboxEventDocument.EVENT_TYPE))
                 .isEqualTo(DriverEventType.DRIVER_UPDATED.value());
+    }
+
+    @Test
+    void updateWithOutboxKeepsABlockAppliedAfterTheDriverWasRead() throws Exception {
+        Driver driver = newDriver(uniqueDocument(), false);
+        createDriverWithOutbox(driver);
+        Driver readBeforeTheBlock = repository.findById(driver.getId()).orElseThrow();
+        applyEvent(driver, "document_expired_event", d -> block(d, NOW.plusHours(1)));
+
+        readBeforeTheBlock.update("Nombre Actualizado", "nuevo@correo.com", null, NOW.plusHours(2));
+        repository.updateWithOutbox(readBeforeTheBlock, pendingUpdateEvent(readBeforeTheBlock));
+
+        Driver found = repository.findById(driver.getId()).orElseThrow();
+        assertThat(found.getFullName()).isEqualTo("Nombre Actualizado");
+        assertThat(found.isDocumentBlock()).isTrue();
+        assertThat(found.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        assertThat(driverDocument(driver).getString("status")).isEqualTo("INACTIVE_EXPIRED_DOCUMENTS");
+    }
+
+    /** Applies a consumed event to the stored driver, as the SQS consumer does. */
+    private void applyEvent(Driver driver, String eventType, Consumer<Driver> change) {
+        processedEventRepository.applyOnce(UUID.randomUUID(), eventType, driver.getId(), Instant.now(), d -> {
+            change.accept(d);
+            return null;
+        });
+    }
+
+    /** Applies the document block without an outbox event. */
+    private static OutboxEvent block(Driver driver, OffsetDateTime at) {
+        driver.applyDocumentBlock(at);
+        return null;
+    }
+
+    /** The change ReleaseMedicalBlockService applies: release, and the activation event when ACTIVE. */
+    private static OutboxEvent releaseAndActivate(Driver driver, OffsetDateTime at) {
+        driver.releaseMedicalBlock(at);
+        return driver.getStatus() == DriverStatus.ACTIVE ? pendingActivationEvent(driver) : null;
+    }
+
+    private DocumentSnapshot driverDocument(Driver driver) throws Exception {
+        return firestore.collection(DriverDocument.COLLECTION).document(driver.getId().toString()).get().get();
+    }
+
+    private static OutboxEvent pendingBlockedEvent(Driver driver) {
+        EventEnvelope<DriverBlockedPayload> envelope = new EventEnvelope<>(
+                UUID.randomUUID(),
+                DriverEventType.DRIVER_BLOCKED.value(),
+                NOW,
+                "driver",
+                UUID.randomUUID(),
+                new DriverBlockedPayload(driver.getId(), driver.getFullName()));
+        return OutboxEvent.pending(envelope);
+    }
+
+    private static OutboxEvent pendingUpdateEvent(Driver driver) {
+        EventEnvelope<DriverUpdatedPayload> envelope = new EventEnvelope<>(
+                UUID.randomUUID(),
+                DriverEventType.DRIVER_UPDATED.value(),
+                driver.getUpdatedAt(),
+                "driver",
+                UUID.randomUUID(),
+                new DriverUpdatedPayload(driver.getId(), driver.getFullName()));
+        return OutboxEvent.pending(envelope);
     }
 
     private OutboxEvent createDriverWithOutbox(Driver driver) {

@@ -192,13 +192,14 @@ En `/metrics`, las métricas de eventos son:
 - `drivers_outbox_pending`: eventos que siguen pendientes en Firestore.
 
 **Consumo SQS:**
-- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed` o `duplicate`.
+- `drivers_events_consumed_total{event_type, result}`: eventos consumidos con `result = processed`, `duplicate` o `ignored` (documento que no es de conductor, por ejemplo, evento que iba dirigido a vehículs).
 - `drivers_events_dlq_total{event_type, reason}`: eventos enviados o derivados a la DLQ con `reason = invalid_message`, `driver_not_found` o `max_retries`.
 
 ### Publicador del outbox
 
-El registro de un conductor, el alta médica y la modificación de sus datos (`driver_updated_event`, solo si
-algún campo cambia) guardan el evento en `outbox_events` en la misma
+El registro de un conductor, el alta médica, la modificación de sus datos (`driver_updated_event`, solo si
+algún campo cambia) y el vencimiento de su licencia (`driver_blocked_event`, solo si estaba `ACTIVE`; lo
+guarda el consumidor junto con `processed_events`) guardan el evento en `outbox_events` en la misma
 transacción de Firestore, con estado `PENDING`, y responde sin esperar a SNS. Un proceso programado,
 cada `OUTBOX_PUBLISH_INTERVAL_MS` (2 s), lee hasta `OUTBOX_BATCH_SIZE` eventos `PENDING` en orden de
 `created_at`, los publica en `fleetops_driver_events` con el message attribute `event_type` y los marca
@@ -218,15 +219,18 @@ de documentación e incidentes). Procesa:
 - `severe_incident_reported_event`: aplica bloqueo médico (`MEDICAL_HOLD_INCIDENT`).
 
 Acepta el mensaje tal cual o envuelto en la notificación de SNS, y valida el sobre estándar:
-`event_id` y `correlation_id` (UUID), `event_type`, `source`, `occurred_at` (ISO 8601 con offset)
-y `data.driver_id` (UUID). Los campos adicionales se ignoran.
+`event_id` y `correlation_id` (UUID), `event_type`, `source` y `occurred_at` (ISO 8601 con offset o `Z`).
+En `data`, `document_expired_event` debe traer `document_id`, `document_type`, `owner_type`, `owner_id`
+y `expiration_date`, y el conductor es `owner_id` (UUID); los otros dos eventos traen `driver_id` (UUID).
+Los campos adicionales se ignoran.
 
 | Caso | Qué hace | Log | Métrica |
 | :--- | :--- | :--- | :--- |
-| Evento válido | Cambia el estado del conductor y confirma el mensaje. | — | `drivers_events_consumed_total{result="processed"}` |
+| Evento válido | Cambia el estado del conductor y confirma el mensaje. | INFO con `owner_id` y `document_id` en `document_expired_event` | `drivers_events_consumed_total{result="processed"}` |
 | `event_id` ya procesado | Confirma el mensaje sin cambios. | — | `drivers_events_consumed_total{result="duplicate"}` |
+| Documento que no es de un conductor (`owner_type` distinto de `DRIVER`) | Confirma el mensaje sin cambios, sin filtrar por `document_type`. | DEBUG | `drivers_events_consumed_total{result="ignored"}` |
 | JSON inválido, campo faltante o `event_type` desconocido | Lo envía a la DLQ sin reintentos, con los atributos `event_type` y `reason`. | ERROR con `event_id` y el motivo | `drivers_events_dlq_total{reason="invalid_message"}` |
-| Conductor inexistente | Lo envía a la DLQ sin reintentos. | WARN | `drivers_events_dlq_total{reason="driver_not_found"}` |
+| Conductor inexistente | Lo envía a la DLQ sin reintentos. | WARN con `owner_id` (o `driver_id`) y `event_id` | `drivers_events_dlq_total{reason="driver_not_found"}` |
 | Firestore no responde | No confirma el mensaje; SQS lo reentrega y, al 3.er intento fallido, la redrive policy (`maxReceiveCount = 3`) lo mueve a la DLQ. | ERROR en el 3.er intento | `drivers_events_dlq_total{reason="max_retries"}` |
 
 El número de intento sale del atributo `ApproximateReceiveCount` de SQS, que Spring Cloud AWS expone

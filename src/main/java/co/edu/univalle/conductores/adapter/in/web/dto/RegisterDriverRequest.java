@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.adapter.in.web.dto;
 
+import co.edu.univalle.conductores.domain.Driver;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -15,7 +16,7 @@ import jakarta.validation.constraints.Size;
 public record RegisterDriverRequest(
         @NotBlank @Size(min = 3, max = 100) String fullName,
         @NotBlank @Pattern(regexp = "^[0-9]{6,10}$") String documentNumber,
-        @NotBlank @Pattern(regexp = "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$") @Size(max = 100) String email,
+        @NotBlank @Pattern(regexp = Driver.EMAIL_REGEX) @Size(max = 100) String email,
         @Pattern(regexp = "^3[0-9]{9}$") String phone) {
 
     /**

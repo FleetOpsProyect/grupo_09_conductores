@@ -18,9 +18,17 @@ import org.springframework.boot.logging.structured.StructuredLoggingJsonMembersC
  */
 public class ContactDataMaskingCustomizer implements StructuredLoggingJsonMembersCustomizer<Object> {
 
-    /** Sin separadores de JSON, de toString() de records ni de pares clave=valor alrededor. */
+    /** Caracteres que no son separadores de JSON, de toString() de records ni de pares clave=valor. */
+    private static final String NOT_SEPARATOR = "[^\\s@\"'<>()\\[\\]{},;:=";
+
+    /**
+     * Usuario de un email seguido de "@" y, en el lookahead, el dominio sin consumirlo. Toma tiempo lineal
+     * (sin ReDoS): el usuario solo empieza después de un separador o al inicio, así que {@code find()} no
+     * reintenta desde cada letra, y ambos tramos son posesivos y sin grupos repetidos. Si el dominio tiene
+     * extensión lo decide {@link #hasExtension(String)}.
+     */
     private static final Pattern EMAIL = Pattern.compile(
-            "([^\\s@\"'<>()\\[\\]{},;:=]+)@([^\\s@\"'<>()\\[\\]{},;:=]+\\.[A-Za-z]{2,})");
+            "(?<!" + NOT_SEPARATOR + "])(" + NOT_SEPARATOR + "]++)@(?=(" + NOT_SEPARATOR + "]++))");
 
     /** Sin letras ni dígitos alrededor, para no tocar UUIDs, números de documento ni fechas. */
     private static final Pattern PHONE = Pattern.compile("(?<![0-9A-Za-z])3\\d{5}(\\d{4})(?![0-9A-Za-z])");
@@ -50,11 +58,30 @@ public class ContactDataMaskingCustomizer implements StructuredLoggingJsonMember
         Matcher matcher = EMAIL.matcher(value);
         StringBuilder result = new StringBuilder();
         while (matcher.find()) {
-            String masked = matcher.group(1).charAt(0) + "***@" + matcher.group(2);
-            matcher.appendReplacement(result, Matcher.quoteReplacement(masked));
+            String user = matcher.group(1);
+            String replacement = hasExtension(matcher.group(2)) ? user.charAt(0) + "***@" : user + "@";
+            matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
         }
         matcher.appendTail(result);
         return result.toString();
+    }
+
+    /**
+     * Indica si el dominio tiene la forma texto.ext, con al menos dos letras ASCII después de un punto,
+     * como correo.com; lo que siga a la extensión, como el punto final de una frase, no importa.
+     */
+    private static boolean hasExtension(String domain) {
+        for (int i = 1; i < domain.length() - 2; i++) {
+            if (domain.charAt(i) == '.' && isAsciiLetter(domain.charAt(i + 1))
+                    && isAsciiLetter(domain.charAt(i + 2))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAsciiLetter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
     }
 
     private static String maskPhones(String value) {

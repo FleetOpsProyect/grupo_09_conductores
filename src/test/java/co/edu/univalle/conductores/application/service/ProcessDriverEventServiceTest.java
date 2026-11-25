@@ -6,6 +6,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import co.edu.univalle.conductores.application.event.DriverBlockedPayload;
+import co.edu.univalle.conductores.application.event.DriverEventType;
+import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.Command;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.EventProcessingResult;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
@@ -22,7 +25,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Consumer;
+import java.util.function.Function;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -78,6 +81,46 @@ class ProcessDriverEventServiceTest {
     }
 
     @Test
+    void documentExpiredOfAnActiveDriverReturnsDriverBlockedEventForTheOutbox() {
+        Driver driver = repository.add(activeDriver());
+
+        service.process(command(ProcessDriverEventService.DOCUMENT_EXPIRED_EVENT, NOW.plusHours(1)));
+
+        OutboxEvent event = repository.outbox;
+        assertThat(event).isNotNull();
+        assertThat(event.status()).isEqualTo(OutboxEvent.Status.PENDING);
+        assertThat(event.envelope().eventId()).isNotNull().isNotEqualTo(EVENT_ID);
+        assertThat(event.envelope().eventType()).isEqualTo(DriverEventType.DRIVER_BLOCKED.value());
+        assertThat(event.envelope().source()).isEqualTo("driver");
+        assertThat(event.envelope().occurredAt().toInstant()).isEqualTo(PROCESSED_AT);
+        assertThat(event.envelope().correlationId()).isEqualTo(CORRELATION_ID);
+        assertThat(event.envelope().data()).isEqualTo(new DriverBlockedPayload(DRIVER_ID, driver.getFullName()));
+    }
+
+    @Test
+    void documentExpiredOfADriverAlreadyInactiveForDocumentsReturnsNoEvent() {
+        Driver driver = repository.add(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez", "carlos@correo.com",
+                null, true, false, NOW, NOW));
+
+        service.process(command(ProcessDriverEventService.DOCUMENT_EXPIRED_EVENT, NOW.plusHours(1)));
+
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        assertThat(repository.outbox).isNull();
+    }
+
+    @Test
+    void documentExpiredOfADriverOnMedicalHoldKeepsTheHoldAndReturnsNoEvent() {
+        Driver driver = repository.add(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez", "carlos@correo.com",
+                null, false, true, NOW, NOW));
+
+        service.process(command(ProcessDriverEventService.DOCUMENT_EXPIRED_EVENT, NOW.plusHours(1)));
+
+        assertThat(driver.isDocumentBlock()).isTrue();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+        assertThat(repository.outbox).isNull();
+    }
+
+    @Test
     void processesDocumentRenewedEventAndRemovesBlock() {
         Driver driver = repository.add(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez", "carlos@correo.com",
                 null, true, false, NOW, NOW));
@@ -90,6 +133,7 @@ class ProcessDriverEventServiceTest {
         assertThat(driver.isDocumentBlock()).isFalse();
         assertThat(driver.getStatus()).isEqualTo(DriverStatus.ACTIVE);
         assertThat(driver.getUpdatedAt()).isEqualTo(renewedAt);
+        assertThat(repository.outbox).isNull();
         verify(consumerMetrics).recordConsumed(ProcessDriverEventService.DOCUMENT_RENEWED_EVENT, "processed");
     }
 
@@ -104,6 +148,7 @@ class ProcessDriverEventServiceTest {
         assertThat(result).isEqualTo(EventProcessingResult.PROCESSED);
         assertThat(driver.isMedicalBlock()).isTrue();
         assertThat(driver.getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+        assertThat(repository.outbox).isNull();
         verify(consumerMetrics).recordConsumed(ProcessDriverEventService.SEVERE_INCIDENT_REPORTED_EVENT, "processed");
     }
 
@@ -157,6 +202,7 @@ class ProcessDriverEventServiceTest {
         private final Map<UUID, Driver> drivers = new HashMap<>();
         private final Set<UUID> processed = new HashSet<>();
         private Instant processedAt;
+        private OutboxEvent outbox;
         private int calls;
 
         Driver add(Driver driver) {
@@ -165,8 +211,8 @@ class ProcessDriverEventServiceTest {
         }
 
         @Override
-        public boolean applyOnce(
-                UUID eventId, String eventType, UUID driverId, Instant processedAt, Consumer<Driver> change) {
+        public boolean applyOnce(UUID eventId, String eventType, UUID driverId, Instant processedAt,
+                Function<Driver, OutboxEvent> change) {
             calls++;
             if (processed.contains(eventId)) {
                 return false;
@@ -175,7 +221,7 @@ class ProcessDriverEventServiceTest {
             if (driver == null) {
                 throw new DriverNotFoundException(driverId);
             }
-            change.accept(driver);
+            outbox = change.apply(driver);
             processed.add(eventId);
             this.processedAt = processedAt;
             return true;

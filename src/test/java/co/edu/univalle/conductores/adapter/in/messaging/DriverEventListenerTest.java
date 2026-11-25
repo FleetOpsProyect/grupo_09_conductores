@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -13,6 +14,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.Command;
+import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.EventProcessingResult;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DlqSenderPort;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
@@ -43,6 +45,7 @@ class DriverEventListenerTest {
     private static final UUID CORRELATION_ID = UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private static final String OCCURRED_AT = "2026-11-14T12:00:00-05:00";
     private static final String EXPIRED = "document_expired_event";
+    private static final String INCIDENT = "severe_incident_reported_event";
 
     private final JsonMapper jsonMapper = new JsonMapper();
 
@@ -120,7 +123,7 @@ class DriverEventListenerTest {
     void ignoresExtraFields() {
         ObjectNode envelope = validEnvelope();
         envelope.put("extra", "ignored");
-        ((ObjectNode) envelope.get("data")).put("document_id", "doc-1");
+        ((ObjectNode) envelope.get("data")).put("issuing_entity", "Secretaría de Movilidad");
 
         listener.onMessage(envelope.toString(), "1");
 
@@ -132,7 +135,7 @@ class DriverEventListenerTest {
         ObjectNode notification = jsonMapper.createObjectNode();
         notification.put("Type", "Notification");
         notification.put("MessageId", "sns-123");
-        notification.put("Message", validEnvelope().put("event_type", "document_renewed_event").toString());
+        notification.put("Message", driverIdEnvelope("document_renewed_event").toString());
 
         listener.onMessage(notification.toString(), "1");
 
@@ -187,18 +190,103 @@ class DriverEventListenerTest {
 
     @Test
     void sendsEnvelopeWithoutDriverIdToDlqWithEventIdInTheLog() {
-        ObjectNode envelope = validEnvelope();
+        ObjectNode envelope = driverIdEnvelope(INCIDENT);
         ((ObjectNode) envelope.get("data")).remove("driver_id");
 
         listener.onMessage(envelope.toString(), "1");
 
-        verify(dlqSender).sendToDlq(envelope.toString(), EXPIRED, "invalid_message");
+        verify(dlqSender).sendToDlq(envelope.toString(), INCIDENT, "invalid_message");
         assertThat(logs.list).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.ERROR);
             assertThat(event.getFormattedMessage())
                     .contains("event_id=" + EVENT_ID)
                     .contains("Falta el campo obligatorio driver_id");
         });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"document_id", "document_type", "owner_type", "owner_id", "expiration_date"})
+    void sendsDocumentEventWithMissingDataFieldToDlqNamingTheField(String field) {
+        ObjectNode envelope = validEnvelope();
+        ((ObjectNode) envelope.get("data")).remove(field);
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(consumerMetrics).recordDlq(EXPIRED, "invalid_message");
+        verify(dlqSender).sendToDlq(envelope.toString(), EXPIRED, "invalid_message");
+        verify(processDriverEvent, never()).process(any());
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage())
+                    .contains("event_id=" + EVENT_ID)
+                    .contains("Falta el campo obligatorio " + field);
+        });
+    }
+
+    @Test
+    void takesTheDriverFromOwnerIdAndDoesNotRequireDriverId() {
+        listener.onMessage(validEnvelope().toString(), "1");
+
+        ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
+        verify(processDriverEvent).process(captor.capture());
+        assertThat(captor.getValue().driverId()).isEqualTo(DRIVER_ID);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"VEHICLE", "COMPANY"})
+    void acknowledgesDocumentsOfOtherOwnersWithoutChanges(String ownerType) {
+        ObjectNode envelope = validEnvelope();
+        ((ObjectNode) envelope.get("data")).put("owner_type", ownerType)
+                .put("owner_id", "01960000-0000-7000-8000-000000000001")
+                .put("document_type", "SOAT");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(processDriverEvent, never()).process(any());
+        verify(consumerMetrics).recordConsumed(EXPIRED, "ignored");
+        verify(consumerMetrics, never()).recordDlq(any(), any());
+        verify(dlqSender, never()).sendToDlq(any(), any(), any());
+    }
+
+    @Test
+    void doesNotValidateTheOwnerIdFormatOfOtherOwners() {
+        ObjectNode envelope = validEnvelope();
+        ((ObjectNode) envelope.get("data")).put("owner_type", "VEHICLE").put("owner_id", "vehiculo-123");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(processDriverEvent, never()).process(any());
+        verify(dlqSender, never()).sendToDlq(any(), any(), any());
+    }
+
+    @Test
+    void doesNotFilterDriverDocumentsByDocumentType() {
+        ObjectNode envelope = validEnvelope();
+        ((ObjectNode) envelope.get("data")).put("document_type", "OTHER_DOCUMENT");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(processDriverEvent).process(any());
+    }
+
+    @Test
+    void sendsDriverDocumentWithMalformedOwnerIdToDlq() {
+        ObjectNode envelope = validEnvelope();
+        ((ObjectNode) envelope.get("data")).put("owner_id", "not-a-uuid");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(dlqSender).sendToDlq(envelope.toString(), EXPIRED, "invalid_message");
+        verify(processDriverEvent, never()).process(any());
+    }
+
+    @Test
+    void acceptsOccurredAtInUtcWithZ() {
+        listener.onMessage(validEnvelope().put("occurred_at", "2026-10-26T15:04:05Z").toString(), "1");
+
+        ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
+        verify(processDriverEvent).process(captor.capture());
+        assertThat(captor.getValue().occurredAt()).isEqualTo(OffsetDateTime.parse("2026-10-26T15:04:05Z"));
     }
 
     @Test
@@ -242,7 +330,7 @@ class DriverEventListenerTest {
 
     @Test
     void sendsUnsupportedEventTypeToDlqWithErrorLog() {
-        String payload = validEnvelope().put("event_type", "driver_teleported_event").toString();
+        String payload = driverIdEnvelope("driver_teleported_event").toString();
         doThrow(new IllegalArgumentException("Tipo de evento no soportado: driver_teleported_event"))
                 .when(processDriverEvent).process(any());
 
@@ -256,15 +344,70 @@ class DriverEventListenerTest {
 
     @Test
     void sendsToDlqWithWarnLogWhenDriverNotFound() {
-        String payload = validEnvelope().put("event_type", "severe_incident_reported_event").toString();
+        String payload = driverIdEnvelope(INCIDENT).toString();
         doThrow(new DriverNotFoundException(DRIVER_ID)).when(processDriverEvent).process(any());
 
         listener.onMessage(payload, "1");
 
         verify(consumerMetrics).recordDlq("severe_incident_reported_event", "driver_not_found");
         verify(dlqSender).sendToDlq(payload, "severe_incident_reported_event", "driver_not_found");
-        assertThat(logs.list).singleElement()
-                .satisfies(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                    .contains("driver_id=" + DRIVER_ID)
+                    .contains("event_id=" + EVENT_ID);
+        });
+    }
+
+    @Test
+    void logsOwnerIdAndEventIdAtWarnWhenTheDocumentOwnerDoesNotExist() {
+        String payload = validEnvelope().toString();
+        doThrow(new DriverNotFoundException(DRIVER_ID)).when(processDriverEvent).process(any());
+
+        listener.onMessage(payload, "1");
+
+        verify(dlqSender).sendToDlq(payload, EXPIRED, "driver_not_found");
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                    .contains("owner_id=" + DRIVER_ID)
+                    .contains("event_id=" + EVENT_ID);
+        });
+    }
+
+    @Test
+    void logsOwnerIdAndDocumentIdAtInfoWhenTheBlockIsApplied() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+
+        listener.onMessage(validEnvelope().toString(), "1");
+
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage())
+                    .contains("owner_id=" + DRIVER_ID)
+                    .contains("document_id=019a2f4e-8b1c-7d2a-9e3f-1a2b3c4d5e6f");
+            assertThat(event.getMDCPropertyMap())
+                    .containsEntry("event_id", EVENT_ID.toString())
+                    .containsEntry("correlation_id", CORRELATION_ID.toString());
+        });
+    }
+
+    @Test
+    void doesNotLogTheBlockAgainForADuplicateEvent() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.DUPLICATE);
+
+        listener.onMessage(validEnvelope().toString(), "1");
+
+        assertThat(logs.list).isEmpty();
+    }
+
+    @Test
+    void writesTheBlockInfoLogOnlyForDocumentExpiredEvents() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+
+        listener.onMessage(driverIdEnvelope(INCIDENT).toString(), "1");
+
+        assertThat(logs.list).isEmpty();
     }
 
     @ParameterizedTest
@@ -295,14 +438,32 @@ class DriverEventListenerTest {
                 .satisfies(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
     }
 
+    /** A valid document_expired_event of a driver's license, as Documentación publishes it. */
     private ObjectNode validEnvelope() {
+        ObjectNode envelope = envelopeWithoutData(EXPIRED);
+        envelope.putObject("data")
+                .put("document_id", "019a2f4e-8b1c-7d2a-9e3f-1a2b3c4d5e6f")
+                .put("document_type", "DRIVER_LICENSE")
+                .put("owner_type", "DRIVER")
+                .put("owner_id", DRIVER_ID.toString())
+                .put("expiration_date", "2026-11-10");
+        return envelope;
+    }
+
+    /** A valid event whose data carries driver_id (document_renewed_event, severe_incident_reported_event). */
+    private ObjectNode driverIdEnvelope(String eventType) {
+        ObjectNode envelope = envelopeWithoutData(eventType);
+        envelope.putObject("data").put("driver_id", DRIVER_ID.toString());
+        return envelope;
+    }
+
+    private ObjectNode envelopeWithoutData(String eventType) {
         ObjectNode envelope = jsonMapper.createObjectNode();
         envelope.put("event_id", EVENT_ID.toString());
-        envelope.put("event_type", EXPIRED);
+        envelope.put("event_type", eventType);
         envelope.put("occurred_at", OCCURRED_AT);
         envelope.put("source", "documents");
         envelope.put("correlation_id", CORRELATION_ID.toString());
-        envelope.putObject("data").put("driver_id", DRIVER_ID.toString());
         return envelope;
     }
 }

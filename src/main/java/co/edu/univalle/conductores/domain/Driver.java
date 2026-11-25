@@ -14,7 +14,14 @@ public class Driver {
 
     private static final Pattern DOCUMENT_NUMBER_PATTERN = Pattern.compile("^[0-9]{6,10}$");
     private static final Pattern PHONE_PATTERN = Pattern.compile("^3[0-9]{9}$");
-    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    /**
+     * Email with the form user@domain.ext. The first domain part ends at the first dot, so there is only
+     * one way to split the text and the check takes linear time (no ReDoS); it has no repeated groups,
+     * which Java resolves with recursion. The web DTOs use it in their {@code @Pattern}.
+     */
+    public static final String EMAIL_REGEX = "^[^@\\s]++@[^@\\s.]++\\.[^@\\s]++$";
+
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(EMAIL_REGEX);
     private static final int MAX_EMAIL_LENGTH = 100;
 
     private final UUID id;
@@ -80,6 +87,16 @@ public class Driver {
             boolean documentBlock, boolean medicalBlock, OffsetDateTime createdAt, OffsetDateTime updatedAt) {
         return new Driver(id, documentNumber, fullName, email, phone,
                 documentBlock, medicalBlock, createdAt, updatedAt);
+    }
+
+    /**
+     * Indica si un número de documento recibido normalizado es distinto al guardado.
+     *
+     * @param received número de documento recibido, o null si no llegó
+     * @return verdadero si llegó y es distinto al guardado
+     */
+    public boolean isDifferentDocumentNumber(String received) {
+        return received != null && !received.trim().equals(documentNumber);
     }
 
     /**

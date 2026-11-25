@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.BindingResult;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -125,8 +126,26 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex,
             HttpServletRequest request) {
-        Object target = ex.getBindingResult().getTarget();
-        List<FieldError> errors = ex.getBindingResult().getFieldErrors().stream()
+        return invalidBody(ex.getBindingResult(), request);
+    }
+
+    /**
+     * Invalid request body whose errors the controller completed, such as NOT_EDITABLE for document_number
+     * on PUT (HU-08): 400 INVALID_DATA with one entry per invalid field, as for {@code @Valid}.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-field detail
+     */
+    @ExceptionHandler(InvalidRequestBodyException.class)
+    public ResponseEntity<ErrorResponse> handleCompletedInvalidBody(InvalidRequestBodyException ex,
+            HttpServletRequest request) {
+        return invalidBody(ex.getBindingResult(), request);
+    }
+
+    private ResponseEntity<ErrorResponse> invalidBody(BindingResult bindingResult, HttpServletRequest request) {
+        Object target = bindingResult.getTarget();
+        List<FieldError> errors = bindingResult.getFieldErrors().stream()
                 .map(error -> new FieldError(fieldNames.resolve(target, error.getField()),
                         ValidationErrorCodes.fromConstraint(error.getCode())))
                 .toList();

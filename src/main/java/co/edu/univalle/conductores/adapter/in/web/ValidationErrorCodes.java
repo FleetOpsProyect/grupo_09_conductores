@@ -18,6 +18,7 @@ final class ValidationErrorCodes {
     static final String INVALID_FORMAT = "INVALID_FORMAT";
     static final String VALUE_NOT_ALLOWED = "VALUE_NOT_ALLOWED";
     static final String NOT_EDITABLE = "NOT_EDITABLE";
+    static final String NOT_EDITABLE_RULE = "NotEditable";
 
     /** When a field fails several rules, the code listed first wins. */
     private static final List<String> PRIORITY =
@@ -39,7 +40,8 @@ final class ValidationErrorCodes {
             Map.entry("PositiveOrZero", VALUE_NOT_ALLOWED),
             Map.entry("Negative", VALUE_NOT_ALLOWED),
             Map.entry("NegativeOrZero", VALUE_NOT_ALLOWED),
-            Map.entry("typeMismatch", INVALID_TYPE));
+            Map.entry("typeMismatch", INVALID_TYPE),
+            Map.entry(NOT_EDITABLE_RULE, NOT_EDITABLE));
 
     private ValidationErrorCodes() {
     }

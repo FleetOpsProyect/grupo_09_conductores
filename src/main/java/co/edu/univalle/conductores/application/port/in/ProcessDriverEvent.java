@@ -8,6 +8,15 @@ import java.util.UUID;
  */
 public interface ProcessDriverEvent {
 
+    /** Vencimiento de un documento, publicado por Documentación (HU-04). */
+    String DOCUMENT_EXPIRED_EVENT = "document_expired_event";
+
+    /** Renovación de un documento, publicada por Documentación (HU-05). */
+    String DOCUMENT_RENEWED_EVENT = "document_renewed_event";
+
+    /** Incidente grave, publicado por Incidentes (HU-09). */
+    String SEVERE_INCIDENT_REPORTED_EVENT = "severe_incident_reported_event";
+
     /**
      * Resultado del procesamiento de un evento.
      */

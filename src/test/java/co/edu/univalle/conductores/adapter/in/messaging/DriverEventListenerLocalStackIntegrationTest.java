@@ -15,6 +15,7 @@ import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.application.port.out.ProcessedEventRepositoryPort;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
+import com.google.cloud.firestore.Firestore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.net.URI;
@@ -40,13 +41,16 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * TEC_06 contra LocalStack real: el listener consume de la cola, que tiene redrive policy hacia la DLQ
- * con {@code maxReceiveCount = 3}, y escribe en el emulador de Firestore. Cubre los 4 casos: mensaje
- * válido, mensaje inválido o de tipo desconocido, {@code event_id} repetido y Firestore caído.
+ * TEC_06 y HU-04 contra LocalStack real: el listener consume de la cola, que tiene redrive policy hacia la
+ * DLQ con {@code maxReceiveCount = 3}, y escribe en el emulador de Firestore. TEC_06: mensaje inválido o de
+ * tipo desconocido, {@code event_id} repetido y Firestore caído. HU-04 (c8), con el payload de
+ * Documentación: documento de un vehículo (se confirma sin cambios), conductor ACTIVE (se bloquea y se
+ * guarda driver_blocked_event), conductor ya bloqueado (sin evento) y conductor inexistente (DLQ).
  *
  * <p>El fallo de Firestore se simula con un spy sobre el puerto de persistencia, solo para un
  * {@code event_id}, porque el emulador lo comparten todas las pruebas de integración.
@@ -88,6 +92,9 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
     @Autowired
     private MeterRegistry meterRegistry;
 
+    @Autowired
+    private Firestore firestore;
+
     @MockitoSpyBean
     private ProcessedEventRepositoryPort processedEvents;
 
@@ -118,15 +125,63 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    void validEventIsProcessedAndAcknowledged() {
+    void activeDriverIsBlockedAndDriverBlockedEventIsStoredWithTheReceivedCorrelationId() throws Exception {
         UUID driverId = newDriver();
         UUID eventId = UUID.randomUUID();
+        UUID correlationId = UUID.randomUUID();
 
-        send(envelope(eventId, EXPIRED, driverId));
+        send(expiredEnvelope(eventId, correlationId, "DRIVER", driverId.toString()));
 
         await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
         await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
         assertThat(dlqMessageContaining(eventId.toString())).isEmpty();
+        List<JsonNode> blocked = blockedEventsOf(driverId);
+        assertThat(blocked).singleElement().satisfies(event -> {
+            assertThat(event.get("correlation_id").asString()).isEqualTo(correlationId.toString());
+            assertThat(event.get("source").asString()).isEqualTo("driver");
+            assertThat(event.get("data").get("driver_id").asString()).isEqualTo(driverId.toString());
+        });
+    }
+
+    @Test
+    void documentOfAVehicleIsAcknowledgedWithoutChanges() {
+        UUID eventId = UUID.randomUUID();
+        double ignoredBefore = consumed(EXPIRED, "ignored");
+
+        send(expiredEnvelope(eventId, UUID.randomUUID(), "VEHICLE", "01960000-0000-7000-8000-000000000001"));
+
+        await().atMost(TIMEOUT).until(() -> consumed(EXPIRED, "ignored") == ignoredBefore + 1);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        verify(processedEvents, never()).applyOnce(eq(eventId), any(), any(), any(), any());
+        assertThat(dlqMessageContaining(eventId.toString())).isEmpty();
+    }
+
+    @Test
+    void alreadyBlockedDriverStoresNoSecondDriverBlockedEvent() throws Exception {
+        UUID driverId = newDriver();
+        send(expiredEnvelope(UUID.randomUUID(), UUID.randomUUID(), "DRIVER", driverId.toString()));
+        await().atMost(TIMEOUT).until(() -> blockedEventsOf(driverId).size() == 1);
+        double processedBefore = consumed(EXPIRED, "processed");
+
+        send(expiredEnvelope(UUID.randomUUID(), UUID.randomUUID(), "DRIVER", driverId.toString()));
+
+        await().atMost(TIMEOUT).until(() -> consumed(EXPIRED, "processed") == processedBefore + 1);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        assertThat(statusOf(driverId)).isEqualTo(DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        assertThat(blockedEventsOf(driverId)).hasSize(1);
+    }
+
+    @Test
+    void unknownDriverGoesToDlqWithoutRetries() {
+        UUID eventId = UUID.randomUUID();
+
+        send(expiredEnvelope(eventId, UUID.randomUUID(), "DRIVER", UUID.randomUUID().toString()));
+
+        Message moved = awaitDlqMessageContaining(eventId.toString());
+        assertThat(moved.messageAttributes().get("reason").stringValue()).isEqualTo("driver_not_found");
+        assertThat(moved.messageAttributes().get("event_type").stringValue()).isEqualTo(EXPIRED);
+        verify(processedEvents, times(1)).applyOnce(eq(eventId), any(), any(), any(), any());
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
     }
 
     @Test
@@ -186,15 +241,45 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
                 "Conductor Prueba", document, "it" + document + "@correo.com", null, UUID.randomUUID())).getId();
     }
 
+    /** A document_expired_event as Documentación publishes it, for an owner of the given type. */
+    private String expiredEnvelope(UUID eventId, UUID correlationId, String ownerType, String ownerId) {
+        ObjectNode envelope = envelopeWithoutData(eventId, EXPIRED, correlationId);
+        envelope.putObject("data")
+                .put("document_id", UUID.randomUUID().toString())
+                .put("document_type", "DRIVER".equals(ownerType) ? "DRIVER_LICENSE" : "SOAT")
+                .put("owner_type", ownerType)
+                .put("owner_id", ownerId)
+                .put("expiration_date", "2026-11-10");
+        return envelope.toString();
+    }
+
     private String envelope(UUID eventId, String eventType, UUID driverId) {
+        if (EXPIRED.equals(eventType)) {
+            return expiredEnvelope(eventId, UUID.randomUUID(), "DRIVER", driverId.toString());
+        }
+        ObjectNode envelope = envelopeWithoutData(eventId, eventType, UUID.randomUUID());
+        envelope.putObject("data").put("driver_id", driverId.toString());
+        return envelope.toString();
+    }
+
+    private ObjectNode envelopeWithoutData(UUID eventId, String eventType, UUID correlationId) {
         ObjectNode envelope = jsonMapper.createObjectNode();
         envelope.put("event_id", eventId.toString());
         envelope.put("event_type", eventType);
         envelope.put("occurred_at", "2026-11-15T10:00:00-05:00");
         envelope.put("source", "documents");
-        envelope.put("correlation_id", UUID.randomUUID().toString());
-        envelope.putObject("data").put("driver_id", driverId.toString());
-        return envelope.toString();
+        envelope.put("correlation_id", correlationId.toString());
+        return envelope;
+    }
+
+    /** driver_blocked_event envelopes stored in outbox_events for a driver. */
+    private List<JsonNode> blockedEventsOf(UUID driverId) throws Exception {
+        return firestore.collection("outbox_events")
+                .whereEqualTo("event_type", "driver_blocked_event")
+                .get().get().getDocuments().stream()
+                .map(document -> jsonMapper.readTree(document.getString("payload")))
+                .filter(payload -> driverId.toString().equals(payload.get("data").get("driver_id").asString()))
+                .toList();
     }
 
     private static void send(String body) {

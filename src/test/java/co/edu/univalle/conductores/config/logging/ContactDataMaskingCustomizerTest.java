@@ -1,7 +1,9 @@
 package co.edu.univalle.conductores.config.logging;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 class ContactDataMaskingCustomizerTest {
@@ -32,6 +34,29 @@ class ContactDataMaskingCustomizerTest {
                 + "otro 31234567890 corto 312345 at 2026-11-20T10:00:00-05:00";
 
         assertThat(ContactDataMaskingCustomizer.mask(text)).isEqualTo(text);
+    }
+
+    @Test
+    void masksEmailAtTheEndOfASentence() {
+        assertThat(ContactDataMaskingCustomizer.mask("Escríbale a carlos@correo.com."))
+                .isEqualTo("Escríbale a c***@correo.com.");
+    }
+
+    @Test
+    void masksEmailInsideJsonAndParentheses() {
+        assertThat(ContactDataMaskingCustomizer.mask("{\"email\":\"ana@univalle.edu.co\"} (b@x.com)"))
+                .isEqualTo("{\"email\":\"a***@univalle.edu.co\"} (b***@x.com)");
+    }
+
+    @Test
+    void masksLongInputsInLinearTime() {
+        String longUser = "x".repeat(50_000) + "@";
+        String longDomain = "a@" + "b.".repeat(25_000) + "1";
+
+        assertTimeoutPreemptively(Duration.ofSeconds(1), () -> {
+            assertThat(ContactDataMaskingCustomizer.mask(longUser)).isEqualTo(longUser);
+            assertThat(ContactDataMaskingCustomizer.mask(longDomain)).isEqualTo(longDomain);
+        });
     }
 
     @Test

@@ -3,6 +3,7 @@ package co.edu.univalle.conductores.adapter.in.messaging;
 import co.edu.univalle.conductores.application.logging.LogContext;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.Command;
+import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent.EventProcessingResult;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
 import co.edu.univalle.conductores.application.port.out.DlqSenderPort;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
@@ -24,9 +25,11 @@ import tools.jackson.databind.json.JsonMapper;
  * Consumidor SQS que escucha eventos de fleetops_driver_queue.
  *
  * <p>Valida el sobre estándar {@code {event_id, event_type, occurred_at, source, correlation_id, data}}
- * y {@code data.driver_id}. Un mensaje inválido o con tipo desconocido va a la DLQ sin reintentos, con
- * log ERROR. Si falla la persistencia, la excepción se relanza para que SQS reintente; al tercer intento
- * la redrive policy lo mueve a la DLQ.
+ * y los campos de {@code data} que exige cada tipo de evento: {@code document_expired_event} trae
+ * {@code document_id, document_type, owner_type, owner_id, expiration_date} y solo afecta a conductores
+ * ({@code owner_type = DRIVER}); los demás tipos traen {@code driver_id}. Un mensaje inválido o con tipo
+ * desconocido va a la DLQ sin reintentos, con log ERROR. Si falla la persistencia, la excepción se relanza
+ * para que SQS reintente; al tercer intento la redrive policy lo mueve a la DLQ.
  */
 @Component
 @ConditionalOnProperty(name = "app.messaging.consumer-enabled", havingValue = "true", matchIfMissing = true)
@@ -37,6 +40,7 @@ public class DriverEventListener {
 
     private static final Logger log = LoggerFactory.getLogger(DriverEventListener.class);
     private static final String UNKNOWN = "unknown";
+    private static final String DRIVER_OWNER = "DRIVER";
 
     private final ProcessDriverEvent processDriverEvent;
     private final ConsumerMetricsPort consumerMetrics;
@@ -75,6 +79,7 @@ public class DriverEventListener {
             String receiveCount) {
         String eventType = UNKNOWN;
         String eventId = UNKNOWN;
+        Command command = null;
 
         try {
             JsonNode root = unwrapSnsNotification(parseJson(payload));
@@ -84,10 +89,23 @@ public class DriverEventListener {
             MDC.put(LogContext.EVENT_TYPE, eventType);
             MDC.put(LogContext.CORRELATION_ID, textOrUnknown(root, "correlation_id"));
 
-            processDriverEvent.process(toCommand(root));
+            command = toCommand(root);
+            if (command == null) {
+                log.debug("Evento {} ({}) de un documento que no es de conductor: se confirma sin cambios",
+                        eventId, eventType);
+                consumerMetrics.recordConsumed(eventType, "ignored");
+                return;
+            }
+            EventProcessingResult result = processDriverEvent.process(command);
+            if (result == EventProcessingResult.PROCESSED
+                    && ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType)) {
+                log.info("Bloqueo por documento vencido aplicado: owner_id={}, document_id={}",
+                        command.driverId(), textOrUnknown(root.get("data"), "document_id"));
+            }
 
         } catch (DriverNotFoundException ex) {
-            log.warn("Conductor no encontrado para el evento {} ({}): {}", eventId, eventType, ex.getMessage());
+            log.warn("Conductor no encontrado, el evento pasa a la DLQ: {}={}, event_id={}, event_type={}",
+                    driverIdField(eventType), command == null ? UNKNOWN : command.driverId(), eventId, eventType);
             consumerMetrics.recordDlq(eventType, "driver_not_found");
             dlqSender.sendToDlq(payload, eventType, "driver_not_found");
 
@@ -111,6 +129,15 @@ public class DriverEventListener {
         }
     }
 
+    /** Name of the field the driver id came from, to log it as the publisher sent it. */
+    private static String driverIdField(String eventType) {
+        return ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType) ? "owner_id" : "driver_id";
+    }
+
+    /**
+     * Builds the command from the envelope, or returns null when the event does not concern a driver (a
+     * document whose owner is not a driver, HU-04 c3).
+     */
     private Command toCommand(JsonNode root) {
         UUID eventId = requiredUuid(root, "event_id");
         String eventType = requiredText(root, "event_type");
@@ -121,8 +148,24 @@ public class DriverEventListener {
         if (data == null || !data.isObject()) {
             throw new IllegalArgumentException("Falta el campo obligatorio data");
         }
-        UUID driverId = requiredUuid(data, "driver_id");
-        return new Command(eventId, eventType, driverId, occurredAt, correlationId);
+        UUID driverId = ProcessDriverEvent.DOCUMENT_EXPIRED_EVENT.equals(eventType)
+                ? documentOwnerDriverId(data)
+                : requiredUuid(data, "driver_id");
+        return driverId == null ? null : new Command(eventId, eventType, driverId, occurredAt, correlationId);
+    }
+
+    /**
+     * Validates the data of a Documentación event (HU-04 c2) and returns the driver it belongs to, or null
+     * when owner_type is not DRIVER. Every document field is required whatever the owner; document_type is
+     * not filtered (c3).
+     */
+    private static UUID documentOwnerDriverId(JsonNode data) {
+        requiredText(data, "document_id");
+        requiredText(data, "document_type");
+        String ownerType = requiredText(data, "owner_type");
+        requiredText(data, "owner_id");
+        requiredText(data, "expiration_date");
+        return DRIVER_OWNER.equals(ownerType) ? requiredUuid(data, "owner_id") : null;
     }
 
     private JsonNode parseJson(String payload) {

@@ -7,7 +7,6 @@ import co.edu.univalle.conductores.application.event.OutboxEvent;
 import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.domain.Driver;
-import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -32,15 +31,21 @@ public class ReleaseMedicalBlockService implements ReleaseMedicalBlock {
         this.clock = clock;
     }
 
+    /**
+     * Quita el bloqueo médico sobre el conductor que lee la transacción del repositorio, no sobre una
+     * lectura previa, para no pisar un bloqueo por documentos aplicado entre tanto. Si queda ACTIVE,
+     * devuelve driver_activated_event para el outbox.
+     */
     @Override
     public Driver release(UUID id, Command command) {
-        Driver driver = repository.findById(id).orElseThrow(() -> new DriverNotFoundException(id));
         OffsetDateTime now = OffsetDateTime.now(clock);
-        driver.releaseMedicalBlock(now);
+        UUID correlationId = command.correlationId() != null ? command.correlationId() : UUID.randomUUID();
 
-        OutboxEvent outboxEvent = null;
-        if (driver.getStatus() == DriverStatus.ACTIVE) {
-            UUID correlationId = command.correlationId() != null ? command.correlationId() : UUID.randomUUID();
+        return repository.releaseMedical(id, command.notes(), now, driver -> {
+            driver.releaseMedicalBlock(now);
+            if (driver.getStatus() != DriverStatus.ACTIVE) {
+                return null;
+            }
             EventEnvelope<DriverActivatedPayload> envelope = new EventEnvelope<>(
                     UUID.randomUUID(),
                     DriverEventType.DRIVER_ACTIVATED.value(),
@@ -48,10 +53,7 @@ public class ReleaseMedicalBlockService implements ReleaseMedicalBlock {
                     "driver",
                     correlationId,
                     new DriverActivatedPayload(driver.getId(), driver.getFullName()));
-            outboxEvent = OutboxEvent.pending(envelope);
-        }
-
-        repository.saveMedicalRelease(driver, command.notes(), now, outboxEvent);
-        return driver;
+            return OutboxEvent.pending(envelope);
+        });
     }
 }
