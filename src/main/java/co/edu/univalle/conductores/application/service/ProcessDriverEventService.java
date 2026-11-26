@@ -1,5 +1,6 @@
 package co.edu.univalle.conductores.application.service;
 
+import co.edu.univalle.conductores.application.event.DriverActivatedPayload;
 import co.edu.univalle.conductores.application.event.DriverBlockedPayload;
 import co.edu.univalle.conductores.application.event.DriverEventType;
 import co.edu.univalle.conductores.application.event.EventEnvelope;
@@ -13,6 +14,7 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
@@ -21,7 +23,8 @@ import java.util.function.Function;
  * <p>El tipo de evento se valida antes de tocar la base de datos, de modo que un tipo desconocido
  * siempre se rechaza como mensaje inválido. El cambio de estado, el registro en processed_events y, si
  * corresponde, el evento en outbox_events se guardan en la misma transacción. Un vencimiento de documento
- * que deja de tener ACTIVE al conductor guarda driver_blocked_event (HU-04).
+ * que deja de tener ACTIVE al conductor guarda driver_blocked_event (HU-04). Una renovación que quita el
+ * bloqueo por documentos guarda driver_activated_event si el conductor queda ACTIVE (HU-05).
  */
 public class ProcessDriverEventService implements ProcessDriverEvent {
 
@@ -47,7 +50,8 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
 
     @Override
     public EventProcessingResult process(Command command) {
-        Function<Driver, OutboxEvent> change = changeFor(command);
+        AtomicBoolean changed = new AtomicBoolean(true);
+        Function<Driver, OutboxEvent> change = changeFor(command, changed);
 
         boolean applied = processedEventRepository.applyOnce(
                 command.eventId(), command.eventType(), command.driverId(), clock.instant(), change);
@@ -57,14 +61,14 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
             return EventProcessingResult.DUPLICATE;
         }
         consumerMetrics.recordConsumed(command.eventType(), "processed");
-        return EventProcessingResult.PROCESSED;
+        return changed.get() ? EventProcessingResult.PROCESSED : EventProcessingResult.PROCESSED_WITHOUT_CHANGE;
     }
 
     /**
      * Change to apply inside the transaction, on the driver as it is stored when it runs. It returns the
      * outbox event to store with the change, or null.
      */
-    private Function<Driver, OutboxEvent> changeFor(Command command) {
+    private Function<Driver, OutboxEvent> changeFor(Command command, AtomicBoolean changed) {
         OffsetDateTime occurredAt = command.occurredAt();
         return switch (command.eventType()) {
             case DOCUMENT_EXPIRED_EVENT -> driver -> {
@@ -73,8 +77,11 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
                 return wasActive ? blockedEvent(driver, command.correlationId()) : null;
             };
             case DOCUMENT_RENEWED_EVENT -> driver -> {
-                driver.removeDocumentBlock(occurredAt);
-                return null;
+                // The transaction may run this change more than once; the last run is the one committed.
+                boolean wasBlocked = driver.getStatus() != DriverStatus.ACTIVE;
+                changed.set(driver.removeDocumentBlock(occurredAt));
+                boolean reactivated = wasBlocked && driver.getStatus() == DriverStatus.ACTIVE;
+                return reactivated ? activatedEvent(driver, command.correlationId()) : null;
             };
             case SEVERE_INCIDENT_REPORTED_EVENT -> driver -> {
                 driver.applyMedicalBlock(occurredAt);
@@ -88,13 +95,27 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
      * driver_blocked_event for a driver that stopped being ACTIVE, with the correlation_id of the consumed event.
      */
     private OutboxEvent blockedEvent(Driver driver, UUID correlationId) {
-        EventEnvelope<DriverBlockedPayload> envelope = new EventEnvelope<>(
+        return pendingEvent(DriverEventType.DRIVER_BLOCKED,
+                new DriverBlockedPayload(driver.getId(), driver.getFullName()), correlationId);
+    }
+
+    /**
+     * driver_activated_event for a driver that is ACTIVE again after a document renewal, with the correlation_id
+     * of the consumed event.
+     */
+    private OutboxEvent activatedEvent(Driver driver, UUID correlationId) {
+        return pendingEvent(DriverEventType.DRIVER_ACTIVATED,
+                new DriverActivatedPayload(driver.getId(), driver.getFullName()), correlationId);
+    }
+
+    private <T> OutboxEvent pendingEvent(DriverEventType type, T payload, UUID correlationId) {
+        EventEnvelope<T> envelope = new EventEnvelope<>(
                 UUID.randomUUID(),
-                DriverEventType.DRIVER_BLOCKED.value(),
+                type.value(),
                 OffsetDateTime.now(clock),
                 "driver",
                 correlationId,
-                new DriverBlockedPayload(driver.getId(), driver.getFullName()));
+                payload);
         return OutboxEvent.pending(envelope);
     }
 }

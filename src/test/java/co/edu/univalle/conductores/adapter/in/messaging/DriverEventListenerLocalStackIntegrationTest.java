@@ -28,10 +28,12 @@ import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
@@ -64,7 +66,9 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
     private static final String DLQ = "fleetops_driver_dlq_it";
     private static final String EXPIRED = "document_expired_event";
     private static final String RENEWED = "document_renewed_event";
-    private static final Duration TIMEOUT = Duration.ofSeconds(30);
+    private static final String SEVERE_INCIDENT = "severe_incident_reported_event";
+    private static final String ACTIVATED = "driver_activated_event";
+    private static final Duration TIMEOUT = Duration.ofSeconds(60);
 
     @SuppressWarnings("resource")
     static final GenericContainer<?> LOCALSTACK = new GenericContainer<>(
@@ -82,6 +86,9 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
     private static final List<Message> DLQ_MESSAGES = new ArrayList<>();
 
     private final JsonMapper jsonMapper = new JsonMapper();
+
+    @LocalServerPort
+    private int apiPort;
 
     @Autowired
     private RegisterDriver registerDriver;
@@ -111,7 +118,7 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         String dlqArn = sqs.getQueueAttributes(b -> b.queueUrl(dlqUrl)
                 .attributeNames(QueueAttributeName.QUEUE_ARN)).attributes().get(QueueAttributeName.QUEUE_ARN);
         queueUrl = sqs.createQueue(b -> b.queueName(QUEUE).attributes(Map.of(
-                QueueAttributeName.VISIBILITY_TIMEOUT, "2",
+                QueueAttributeName.VISIBILITY_TIMEOUT, "10",
                 QueueAttributeName.REDRIVE_POLICY,
                 "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"3\"}"))).queueUrl();
 
@@ -235,6 +242,74 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         assertThat(statusOf(driverId)).isEqualTo(DriverStatus.ACTIVE);
     }
 
+    @Test
+    void renewalOfADriverWithMedicalHoldKeepsTheHoldAndStoresNoEvent() throws Exception {
+        UUID driverId = newDriver();
+        send(envelope(UUID.randomUUID(), SEVERE_INCIDENT, driverId));
+        await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.MEDICAL_HOLD_INCIDENT);
+        send(expiredEnvelope(UUID.randomUUID(), UUID.randomUUID(), "DRIVER", driverId.toString()));
+        await().atMost(TIMEOUT).until(() -> documentBlockOf(driverId));
+        double processedBefore = consumed(RENEWED, "processed");
+
+        UUID renewalCorrelationId = UUID.randomUUID();
+        send(renewedEnvelope(UUID.randomUUID(), renewalCorrelationId, driverId.toString()));
+
+        await().atMost(TIMEOUT).until(() -> consumed(RENEWED, "processed") == processedBefore + 1);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        assertThat(documentBlockOf(driverId)).isFalse();
+        assertThat(statusOf(driverId)).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+        assertThat(eventsOf(ACTIVATED, driverId, renewalCorrelationId)).isEmpty();
+    }
+
+    @Test
+    void renewalThatReactivatesStoresActivatedEventAndTheApiReturnsActive() throws Exception {
+        UUID driverId = newDriver();
+        UUID correlationId = UUID.randomUUID();
+        send(expiredEnvelope(UUID.randomUUID(), UUID.randomUUID(), "DRIVER", driverId.toString()));
+        await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+
+        send(renewedEnvelope(UUID.randomUUID(), correlationId, driverId.toString()));
+
+        await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.ACTIVE);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        assertThat(eventsOf(ACTIVATED, driverId, correlationId)).singleElement().satisfies(event -> {
+            assertThat(event.get("correlation_id").asString()).isEqualTo(correlationId.toString());
+            assertThat(event.get("source").asString()).isEqualTo("driver");
+            assertThat(event.get("data").get("driver_id").asString()).isEqualTo(driverId.toString());
+        });
+        assertThat(statusFromApi(driverId)).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void renewalForAnUnknownOwnerGoesToDlqWithoutRetries() {
+        UUID eventId = UUID.randomUUID();
+
+        send(renewedEnvelope(eventId, UUID.randomUUID(), UUID.randomUUID().toString()));
+
+        Message moved = awaitDlqMessageContaining(eventId.toString());
+        assertThat(moved.messageAttributes().get("reason").stringValue()).isEqualTo("driver_not_found");
+        assertThat(moved.messageAttributes().get("event_type").stringValue()).isEqualTo(RENEWED);
+        verify(processedEvents, times(1)).applyOnce(eq(eventId), any(), any(), any(), any());
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+    }
+
+    @Test
+    void firestoreFailureOnRenewalIsRetriedAndMovesToDlqOnTheThirdAttempt() {
+        UUID driverId = newDriver();
+        UUID eventId = UUID.randomUUID();
+        doThrow(new PersistenceUnavailableException("Firestore unavailable (simulated)", null))
+                .when(processedEvents).applyOnce(eq(eventId), any(), any(), any(), any());
+        double maxRetriesBefore = dlqCount(RENEWED, "max_retries");
+
+        send(renewedEnvelope(eventId, UUID.randomUUID(), driverId.toString()));
+
+        Message moved = awaitDlqMessageContaining(eventId.toString());
+        assertThat(moved.messageAttributes()).doesNotContainKey("reason");
+        verify(processedEvents, times(3)).applyOnce(eq(eventId), any(), any(), any(), any());
+        assertThat(dlqCount(RENEWED, "max_retries")).isEqualTo(maxRetriesBefore + 1);
+        assertThat(statusOf(driverId)).isEqualTo(DriverStatus.ACTIVE);
+    }
+
     private UUID newDriver() {
         String document = String.valueOf(ThreadLocalRandom.current().nextLong(1_000_000_000L, 9_999_999_999L));
         return registerDriver.register(new RegisterDriver.Command(
@@ -253,9 +328,24 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         return envelope.toString();
     }
 
+    private String renewedEnvelope(UUID eventId, UUID correlationId, String ownerId) {
+        ObjectNode envelope = envelopeWithoutData(eventId, RENEWED, correlationId);
+        envelope.putObject("data")
+                .put("document_id", UUID.randomUUID().toString())
+                .put("previous_document_id", UUID.randomUUID().toString())
+                .put("origin", "RENEWAL")
+                .put("document_type", "DRIVER_LICENSE")
+                .put("owner_type", "DRIVER")
+                .put("owner_id", ownerId);
+        return envelope.toString();
+    }
+
     private String envelope(UUID eventId, String eventType, UUID driverId) {
         if (EXPIRED.equals(eventType)) {
             return expiredEnvelope(eventId, UUID.randomUUID(), "DRIVER", driverId.toString());
+        }
+        if (RENEWED.equals(eventType)) {
+            return renewedEnvelope(eventId, UUID.randomUUID(), driverId.toString());
         }
         ObjectNode envelope = envelopeWithoutData(eventId, eventType, UUID.randomUUID());
         envelope.putObject("data").put("driver_id", driverId.toString());
@@ -274,8 +364,13 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
 
     /** driver_blocked_event envelopes stored in outbox_events for a driver. */
     private List<JsonNode> blockedEventsOf(UUID driverId) throws Exception {
+        return eventsOf("driver_blocked_event", driverId);
+    }
+
+    /** Envelopes of the given type stored in outbox_events for a driver. */
+    private List<JsonNode> eventsOf(String eventType, UUID driverId) throws Exception {
         return firestore.collection("outbox_events")
-                .whereEqualTo("event_type", "driver_blocked_event")
+                .whereEqualTo("event_type", eventType)
                 .get().get().getDocuments().stream()
                 .map(document -> jsonMapper.readTree(document.getString("payload")))
                 .filter(payload -> driverId.toString().equals(payload.get("data").get("driver_id").asString()))
@@ -288,6 +383,24 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
 
     private DriverStatus statusOf(UUID driverId) {
         return driverRepository.findById(driverId).orElseThrow().getStatus();
+    }
+
+    /** Envelopes of the given type for a driver that carry the given correlation_id. */
+    private List<JsonNode> eventsOf(String eventType, UUID driverId, UUID correlationId) throws Exception {
+        return eventsOf(eventType, driverId).stream()
+                .filter(event -> correlationId.toString().equals(event.get("correlation_id").asString()))
+                .toList();
+    }
+
+    private boolean documentBlockOf(UUID driverId) {
+        return driverRepository.findById(driverId).orElseThrow().isDocumentBlock();
+    }
+
+    /** Status reported by GET /drivers/{id} on the API port. */
+    private String statusFromApi(UUID driverId) throws Exception {
+        String body = RestClient.create("http://localhost:" + apiPort)
+                .get().uri("/drivers/{id}", driverId).retrieve().body(String.class);
+        return jsonMapper.readTree(body).get("status").asString();
     }
 
     private static int messagesLeftInQueue() {
