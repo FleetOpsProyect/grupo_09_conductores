@@ -33,6 +33,9 @@ app:
     emulator-host: ${FIREBASE_EMULATOR_HOST:}
   firestore:
     timeout: ${FIRESTORE_TIMEOUT:2s}
+  documentacion:
+    url: ${DOCUMENTACION_URL:}
+    timeout-ms: ${DOCUMENTACION_TIMEOUT_MS:2000}
   messaging:
     driver-events-topic-arn: "${FLEETOPS_DRIVER_TOPIC_ARN:arn:aws:sns:us-east-1:000000000000:fleetops_driver_events}"
     driver-queue: "${FLEETOPS_DRIVER_QUEUE_URL:fleetops_driver_queue}"
