@@ -11,6 +11,7 @@ import co.edu.univalle.conductores.adapter.in.web.dto.UpdateDriverRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.ValidDriversResponse;
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
+import co.edu.univalle.conductores.application.port.in.ListValidDrivers;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
@@ -93,6 +94,7 @@ public class DriverController {
     private final RegisterDriver registerDriver;
     private final GetDriver getDriver;
     private final ListDriver listDriver;
+    private final ListValidDrivers listValidDrivers;
     private final UpdateDriver updateDriver;
     private final ReleaseMedicalBlock releaseMedicalBlock;
     private final Clock clock;
@@ -102,17 +104,19 @@ public class DriverController {
      *
      * @param registerDriver      caso de uso de registro
      * @param getDriver           caso de uso de consulta
-     * @param listDriver          caso de uso de listado
+     * @param listDriver          caso de uso de listado paginado
+     * @param listValidDrivers    caso de uso de listado de conductores con licencia vigente
      * @param updateDriver        caso de uso de actualización
      * @param releaseMedicalBlock caso de uso de alta médica
      * @param clock               reloj inyectable para validar fechas en GMT-5
      */
     public DriverController(RegisterDriver registerDriver, GetDriver getDriver,
-            ListDriver listDriver, UpdateDriver updateDriver, ReleaseMedicalBlock releaseMedicalBlock,
-            Optional<Clock> clock) {
+            ListDriver listDriver, ListValidDrivers listValidDrivers, UpdateDriver updateDriver,
+            ReleaseMedicalBlock releaseMedicalBlock, Optional<Clock> clock) {
         this.registerDriver = registerDriver;
         this.getDriver = getDriver;
         this.listDriver = listDriver;
+        this.listValidDrivers = listValidDrivers;
         this.updateDriver = updateDriver;
         this.releaseMedicalBlock = releaseMedicalBlock;
         this.clock = clock.orElseGet(() -> Clock.system(BOGOTA_ZONE));
@@ -215,28 +219,93 @@ public class DriverController {
      * @param size       tamaño de página, entre 1 y 100 (ignorado si llega {@code valid_until})
      * @return página de conductores (HU-06) o listado de conductores vigentes (HU-07)
      */
-    @Operation(summary = "Listar conductores por estado (HU-06)",
+    @Operation(summary = "Listar conductores por estado (HU-06) o con licencia vigente a una fecha (HU-07)",
         description = """
-            Lista los conductores ordenados de forma ascendente por created_at, con filtro \
-            opcional por status. total es el número de conductores que cumplen el filtro en \
-            todas las páginas. Si ninguno lo cumple, o page supera la última página, responde \
-            200 con content vacío, nunca 404.
+            Sin valid_until (HU-06): lista los conductores ordenados de forma ascendente por \
+            created_at, con filtro opcional por status y paginación. total es el número de \
+            conductores que cumplen el filtro en todas las páginas.
 
-            """ + FLEET_ADMIN_ONLY)
+            Con valid_until (HU-07): consulta al servicio de Documentación en lotes de hasta 100 \
+            conductores y devuelve los conductores elegibles (excluyendo MEDICAL_HOLD_INCIDENT y \
+            conductores sin licencia registrada) cuya licencia está vigente hasta esa fecha, \
+            ordenados por created_at sin paginar. page y size se ignoran sin validarse. \
+            content tiene un máximo de 500 elementos; total indica el total de conductores vigentes \
+            encontrados (aunque content se trunque en 500) y truncated indica si superó los 500.
+
+            **Orden de validación:** primero status (enum DriverStatus); luego valid_until (si \
+            llega); y solo si valid_until está ausente se validan page y size.
+
+            """ + FLEET_ADMIN_ONLY,
+        parameters = {
+            @Parameter(name = "status", in = ParameterIn.QUERY, required = false,
+                description = "Estado operativo opcional del conductor",
+                schema = @Schema(implementation = DriverStatus.class)),
+            @Parameter(name = "valid_until", in = ParameterIn.QUERY, required = false,
+                description = "Fecha límite de vigencia de licencia (AAAA-MM-DD, no anterior a hoy "
+                    + "en GMT-5). Si está presente, ignora page y size sin validarlos.",
+                schema = @Schema(type = "string", format = "date", example = "2026-12-31")),
+            @Parameter(name = "page", in = ParameterIn.QUERY, required = false,
+                description = "Número de página desde 0 (ignorado si llega valid_until)",
+                schema = @Schema(type = "integer", defaultValue = "0", minimum = "0")),
+            @Parameter(name = "size", in = ParameterIn.QUERY, required = false,
+                description = "Tamaño de página entre 1 y 100 (ignorado si llega valid_until)",
+                schema = @Schema(type = "integer", defaultValue = "20", minimum = "1", maximum = "100"))
+        })
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Página de conductores"),
+        @ApiResponse(responseCode = "200",
+            description = "Página de conductores (HU-06) o listado de conductores vigentes (HU-07)",
+            content = {
+                @Content(mediaType = "application/json",
+                    schema = @Schema(oneOf = { DriverPageResponse.class, ValidDriversResponse.class }),
+                    examples = @ExampleObject(name = "HU07_VALID_DRIVERS",
+                        value = """
+                            {\
+                              "content": [],\
+                              "total": 0,\
+                              "truncated": false\
+                            }"""))
+            }),
         @ApiResponse(responseCode = "400",
             description = """
                 INVALID_DATA: status, page, size o valid_until no cumplen su regla; errors trae un \
                 elemento por cada parámetro inválido.""",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = {
+                    @ExampleObject(name = "INVALID_FORMAT",
+                        value = """
+                            {\
+                              "code": "INVALID_DATA",\
+                              "message": "Hay parámetros inválidos",\
+                              "timestamp": "2026-11-25T23:00:00-05:00",\
+                              "path": "/drivers",\
+                              "errors": [{"field": "valid_until", "code": "INVALID_FORMAT"}]\
+                            }"""),
+                    @ExampleObject(name = "VALUE_NOT_ALLOWED",
+                        value = """
+                            {\
+                              "code": "INVALID_DATA",\
+                              "message": "Hay parámetros inválidos",\
+                              "timestamp": "2026-11-25T23:00:00-05:00",\
+                              "path": "/drivers",\
+                              "errors": [{"field": "valid_until", "code": "VALUE_NOT_ALLOWED"}]\
+                            }""")
+                })),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "503",
-            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+            description = "SERVICE_UNAVAILABLE (Firestore) o DEPENDENCY_UNAVAILABLE (Documentación)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = @ExampleObject(name = "DEPENDENCY_UNAVAILABLE",
+                    value = """
+                        {\
+                          "code": "DEPENDENCY_UNAVAILABLE",\
+                          "message": "No fue posible validar la vigencia de las licencias, intente nuevamente",\
+                          "timestamp": "2026-11-25T23:00:00-05:00",\
+                          "path": "/drivers",\
+                          "errors": []\
+                        }""")))
     })
     @GetMapping
     public ResponseEntity<Object> list(@RequestParam(required = false) DriverStatus status,
@@ -244,8 +313,12 @@ public class DriverController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         if (validUntil != null) {
-            parseValidUntil(validUntil);
-            return ResponseEntity.ok(new ValidDriversResponse(List.of(), 0L, false));
+            LocalDate validUntilDate = parseValidUntil(validUntil);
+            ListValidDrivers.ValidDriversResult result = listValidDrivers.listValid(
+                    new ListValidDrivers.Query(status, validUntilDate));
+            return ResponseEntity.ok(new ValidDriversResponse(
+                    result.content().stream().map(DriverResponse::from).toList(),
+                    result.total(), result.truncated()));
         }
         validatePagination(page, size);
         PageResult<Driver> result = listDriver.list(new ListDriver.Query(status, page, size));

@@ -1,19 +1,22 @@
 package co.edu.univalle.conductores.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
+import co.edu.univalle.conductores.application.port.in.ListValidDrivers;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
-import co.edu.univalle.conductores.application.port.out.DocumentValidityPort;
+import co.edu.univalle.conductores.domain.DocumentationUnavailableException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,13 +53,13 @@ class ValidUntilValidationWebTest {
     private ListDriver listDriver;
 
     @MockitoBean
+    private ListValidDrivers listValidDrivers;
+
+    @MockitoBean
     private UpdateDriver updateDriver;
 
     @MockitoBean
     private ReleaseMedicalBlock releaseMedicalBlock;
-
-    @MockitoBean
-    private DocumentValidityPort documentValidityPort;
 
     @MockitoBean
     private Clock clock;
@@ -66,6 +69,8 @@ class ValidUntilValidationWebTest {
         when(clock.instant()).thenReturn(NOW_BOGOTA);
         when(clock.getZone()).thenReturn(BOGOTA);
         when(clock.withZone(BOGOTA)).thenReturn(Clock.fixed(NOW_BOGOTA, BOGOTA));
+        when(listValidDrivers.listValid(any()))
+                .thenReturn(new ListValidDrivers.ValidDriversResult(List.of(), 0L, false));
     }
 
     @Test
@@ -80,7 +85,7 @@ class ValidUntilValidationWebTest {
         assertThat(body.path("errors")).hasSize(1);
         assertThat(body.path("errors").get(0).path("field").asString()).isEqualTo("valid_until");
         assertThat(body.path("errors").get(0).path("code").asString()).isEqualTo("INVALID_FORMAT");
-        verifyNoInteractions(documentValidityPort, listDriver);
+        verifyNoInteractions(listValidDrivers, listDriver);
     }
 
     @Test
@@ -94,7 +99,7 @@ class ValidUntilValidationWebTest {
         assertThat(body.path("code").asString()).isEqualTo("INVALID_DATA");
         assertThat(body.path("errors").get(0).path("field").asString()).isEqualTo("valid_until");
         assertThat(body.path("errors").get(0).path("code").asString()).isEqualTo("INVALID_FORMAT");
-        verifyNoInteractions(documentValidityPort, listDriver);
+        verifyNoInteractions(listValidDrivers, listDriver);
     }
 
     @Test
@@ -109,7 +114,7 @@ class ValidUntilValidationWebTest {
         assertThat(body.path("errors")).hasSize(1);
         assertThat(body.path("errors").get(0).path("field").asString()).isEqualTo("valid_until");
         assertThat(body.path("errors").get(0).path("code").asString()).isEqualTo("VALUE_NOT_ALLOWED");
-        verifyNoInteractions(documentValidityPort, listDriver);
+        verifyNoInteractions(listValidDrivers, listDriver);
     }
 
     @Test
@@ -147,7 +152,7 @@ class ValidUntilValidationWebTest {
         assertThat(body.path("code").asString()).isEqualTo("INVALID_DATA");
         assertThat(body.path("errors").get(0).path("field").asString()).isEqualTo("status");
         assertThat(body.path("errors").get(0).path("code").asString()).isEqualTo("VALUE_NOT_ALLOWED");
-        verifyNoInteractions(documentValidityPort, listDriver);
+        verifyNoInteractions(listValidDrivers, listDriver);
     }
 
     @Test
@@ -161,6 +166,22 @@ class ValidUntilValidationWebTest {
         assertThat(body.path("code").asString()).isEqualTo("INVALID_DATA");
         assertThat(body.path("errors").get(0).path("field").asString()).isEqualTo("size");
         assertThat(body.path("errors").get(0).path("code").asString()).isEqualTo("VALUE_NOT_ALLOWED");
-        verifyNoInteractions(documentValidityPort, listDriver);
+        verifyNoInteractions(listValidDrivers, listDriver);
+    }
+
+    @Test
+    void documentationUnavailableReturns503DependencyUnavailable() throws Exception {
+        when(listValidDrivers.listValid(any()))
+                .thenThrow(new DocumentationUnavailableException("timeout"));
+
+        MockHttpServletResponse response = mockMvc.perform(
+                get("/drivers").param("status", "ACTIVE").param("valid_until", "2026-11-25"))
+                .andReturn().getResponse();
+
+        assertThat(response.getStatus()).isEqualTo(503);
+        JsonNode body = MAPPER.readTree(response.getContentAsString());
+        assertThat(body.path("code").asString()).isEqualTo("DEPENDENCY_UNAVAILABLE");
+        assertThat(body.path("message").asString())
+                .isEqualTo("No fue posible validar la vigencia de las licencias, intente nuevamente");
     }
 }

@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
+import co.edu.univalle.conductores.application.port.in.ListValidDrivers;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
@@ -70,6 +71,9 @@ class GlobalExceptionHandlerWebTest {
 
     @MockitoBean
     private ListDriver listDriver;
+
+    @MockitoBean
+    private ListValidDrivers listValidDrivers;
 
     @MockitoBean
     private UpdateDriver updateDriver;

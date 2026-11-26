@@ -5,6 +5,7 @@ import co.edu.univalle.conductores.domain.Driver;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.PageResult;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
@@ -57,6 +58,15 @@ public interface DriverRepository {
      * @return una página de conductores
      */
     PageResult<Driver> findAll(DriverStatus status, int page, int size);
+
+    /**
+     * Lista los conductores candidatos para validar vigencia de licencia (excluyendo
+     * {@link DriverStatus#MEDICAL_HOLD_INCIDENT}), ordenados de forma ascendente por {@code created_at}.
+     *
+     * @param status estado a filtrar, o {@code null} para incluir todos los estados elegibles
+     * @return lista de conductores candidatos ordenados por {@code created_at}
+     */
+    List<Driver> findCandidates(DriverStatus status);
 
     /**
      * Registra el alta médica en una sola transacción: lee el conductor actual, le aplica {@code release},
