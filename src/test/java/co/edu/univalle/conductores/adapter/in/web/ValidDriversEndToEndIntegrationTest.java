@@ -3,6 +3,7 @@ package co.edu.univalle.conductores.adapter.in.web;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.matching;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,9 +15,8 @@ import co.edu.univalle.conductores.config.FirestoreProperties;
 import co.edu.univalle.conductores.domain.Driver;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.cloud.firestore.Firestore;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
-import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import com.google.cloud.firestore.Firestore;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -136,18 +136,15 @@ class ValidDriversEndToEndIntegrationTest extends BaseIntegrationTest {
         UUID batch2Last = seededActive.get(149).getId();
 
         wireMock.stubFor(get(urlPathEqualTo("/documents/validity-check"))
-                .inScenario("two-batches")
-                .whenScenarioStateIs(Scenario.STARTED)
+                .withQueryParam("owner_ids", matching("^([0-9a-fA-F-]+,){99}[0-9a-fA-F-]+$"))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody("{\"data\":[{\"owner_id\":\"%s\"},{\"owner_id\":\"%s\"}]}"
-                                .formatted(batch1First, batch1Last)))
-                .willSetStateTo("SECOND_BATCH"));
+                                .formatted(batch1First, batch1Last))));
 
         wireMock.stubFor(get(urlPathEqualTo("/documents/validity-check"))
-                .inScenario("two-batches")
-                .whenScenarioStateIs("SECOND_BATCH")
+                .withQueryParam("owner_ids", matching("^([0-9a-fA-F-]+,){49}[0-9a-fA-F-]+$"))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
@@ -190,17 +187,14 @@ class ValidDriversEndToEndIntegrationTest extends BaseIntegrationTest {
         }
 
         wireMock.stubFor(get(urlPathEqualTo("/documents/validity-check"))
-                .inScenario("second-batch-fails")
-                .whenScenarioStateIs(Scenario.STARTED)
+                .withQueryParam("owner_ids", matching("^([0-9a-fA-F-]+,){99}[0-9a-fA-F-]+$"))
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withHeader("Content-Type", "application/json")
-                        .withBody("{\"data\":[]}"))
-                .willSetStateTo("FAIL_SECOND"));
+                        .withBody("{\"data\":[]}")));
 
         wireMock.stubFor(get(urlPathEqualTo("/documents/validity-check"))
-                .inScenario("second-batch-fails")
-                .whenScenarioStateIs("FAIL_SECOND")
+                .withQueryParam("owner_ids", matching("^([0-9a-fA-F-]+,){4}[0-9a-fA-F-]+$"))
                 .willReturn(aResponse().withStatus(503)));
 
         ResponseEntity<String> response = client().get()
@@ -214,7 +208,7 @@ class ValidDriversEndToEndIntegrationTest extends BaseIntegrationTest {
         assertThat(body.path("message").asText())
                 .isEqualTo("No fue posible validar la vigencia de las licencias, intente nuevamente");
         assertThat(body.has("content")).isFalse();
-        wireMock.verify(2, getRequestedFor(urlPathEqualTo("/documents/validity-check")));
+        assertThat(wireMock.getAllServeEvents()).hasSize(2);
     }
 
     private RestClient client() {
