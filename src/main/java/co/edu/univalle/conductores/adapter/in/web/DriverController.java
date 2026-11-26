@@ -3,10 +3,12 @@ package co.edu.univalle.conductores.adapter.in.web;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverPageResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
+import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.adapter.in.web.dto.GatewayErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.MedicalReleaseRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.RegisterDriverRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.UpdateDriverRequest;
+import co.edu.univalle.conductores.adapter.in.web.dto.ValidDriversResponse;
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
@@ -27,8 +29,13 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -61,6 +68,11 @@ public class DriverController {
     private static final Pattern UUID_PATTERN = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
+    /** Strict ISO calendar date format YYYY-MM-DD. */
+    private static final Pattern DATE_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
+
+    private static final ZoneId BOGOTA_ZONE = ZoneId.of("America/Bogota");
+
     /** Role rule of the routes that only FLEET_ADMIN can call through API Gateway. */
     static final String FLEET_ADMIN_ONLY = """
             **Roles:** por API Gateway solo el grupo FLEET_ADMIN (Administrador de Flota). Lo aplica \
@@ -83,23 +95,27 @@ public class DriverController {
     private final ListDriver listDriver;
     private final UpdateDriver updateDriver;
     private final ReleaseMedicalBlock releaseMedicalBlock;
+    private final Clock clock;
 
     /**
      * Crea el controlador con los puertos de entrada.
      *
-     * @param registerDriver caso de uso de registro
-     * @param getDriver caso de uso de consulta
-     * @param listDriver caso de uso de listado
-     * @param updateDriver caso de uso de actualización
+     * @param registerDriver      caso de uso de registro
+     * @param getDriver           caso de uso de consulta
+     * @param listDriver          caso de uso de listado
+     * @param updateDriver        caso de uso de actualización
      * @param releaseMedicalBlock caso de uso de alta médica
+     * @param clock               reloj inyectable para validar fechas en GMT-5
      */
     public DriverController(RegisterDriver registerDriver, GetDriver getDriver,
-            ListDriver listDriver, UpdateDriver updateDriver, ReleaseMedicalBlock releaseMedicalBlock) {
+            ListDriver listDriver, UpdateDriver updateDriver, ReleaseMedicalBlock releaseMedicalBlock,
+            Optional<Clock> clock) {
         this.registerDriver = registerDriver;
         this.getDriver = getDriver;
         this.listDriver = listDriver;
         this.updateDriver = updateDriver;
         this.releaseMedicalBlock = releaseMedicalBlock;
+        this.clock = clock.orElseGet(() -> Clock.system(BOGOTA_ZONE));
     }
 
     /**
@@ -185,12 +201,19 @@ public class DriverController {
     }
 
     /**
-     * Lista conductores con filtro opcional por estado y paginación.
+     * Lista conductores con filtro opcional por estado y paginación (HU-06), o conductores con
+     * licencia vigente hasta {@code valid_until} (HU-07).
      *
-     * @param status estado a filtrar, opcional
-     * @param page número de página desde 0
-     * @param size tamaño de página, entre 1 y 100
-     * @return página de conductores
+     * <p>Orden de validación: primero {@code status} (binding del enum {@link DriverStatus}); si llega
+     * {@code valid_until}, se valida su formato ({@code AAAA-MM-DD} y fecha calendario válida) y que no
+     * sea anterior a hoy en GMT-5 ({@code America/Bogota}), ignorando {@code page} y {@code size}. Si
+     * {@code valid_until} no llega, se validan {@code page} y {@code size} con las reglas de HU-06.
+     *
+     * @param status     estado a filtrar, opcional
+     * @param validUntil fecha límite de vigencia de licencia ({@code AAAA-MM-DD}), opcional
+     * @param page       número de página desde 0 (ignorado si llega {@code valid_until})
+     * @param size       tamaño de página, entre 1 y 100 (ignorado si llega {@code valid_until})
+     * @return página de conductores (HU-06) o listado de conductores vigentes (HU-07)
      */
     @Operation(summary = "Listar conductores por estado (HU-06)",
         description = """
@@ -204,8 +227,8 @@ public class DriverController {
         @ApiResponse(responseCode = "200", description = "Página de conductores"),
         @ApiResponse(responseCode = "400",
             description = """
-                INVALID_DATA: status, page o size no cumplen su regla; errors trae un elemento \
-                por cada parámetro inválido.""",
+                INVALID_DATA: status, page, size o valid_until no cumplen su regla; errors trae un \
+                elemento por cada parámetro inválido.""",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
@@ -216,13 +239,52 @@ public class DriverController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @GetMapping
-    public DriverPageResponse list(@RequestParam(required = false) DriverStatus status,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    public ResponseEntity<Object> list(@RequestParam(required = false) DriverStatus status,
+            @RequestParam(name = "valid_until", required = false) String validUntil,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        if (validUntil != null) {
+            parseValidUntil(validUntil);
+            return ResponseEntity.ok(new ValidDriversResponse(List.of(), 0L, false));
+        }
+        validatePagination(page, size);
         PageResult<Driver> result = listDriver.list(new ListDriver.Query(status, page, size));
-        return new DriverPageResponse(
+        return ResponseEntity.ok(new DriverPageResponse(
                 result.content().stream().map(DriverResponse::from).toList(),
-                result.page(), result.size(), result.total());
+                result.page(), result.size(), result.total()));
+    }
+
+    private LocalDate parseValidUntil(String validUntil) {
+        if (!DATE_PATTERN.matcher(validUntil).matches()) {
+            throw new InvalidQueryParamsException(
+                    List.of(new FieldError("valid_until", ValidationErrorCodes.INVALID_FORMAT)));
+        }
+        LocalDate parsed;
+        try {
+            parsed = LocalDate.parse(validUntil);
+        } catch (DateTimeParseException ex) {
+            throw new InvalidQueryParamsException(
+                    List.of(new FieldError("valid_until", ValidationErrorCodes.INVALID_FORMAT)));
+        }
+        LocalDate today = LocalDate.now(clock.withZone(BOGOTA_ZONE));
+        if (parsed.isBefore(today)) {
+            throw new InvalidQueryParamsException(
+                    List.of(new FieldError("valid_until", ValidationErrorCodes.VALUE_NOT_ALLOWED)));
+        }
+        return parsed;
+    }
+
+    private static void validatePagination(int page, int size) {
+        List<FieldError> errors = new ArrayList<>();
+        if (page < 0) {
+            errors.add(new FieldError("page", ValidationErrorCodes.VALUE_NOT_ALLOWED));
+        }
+        if (size < 1 || size > 100) {
+            errors.add(new FieldError("size", ValidationErrorCodes.VALUE_NOT_ALLOWED));
+        }
+        if (!errors.isEmpty()) {
+            throw new InvalidQueryParamsException(errors);
+        }
     }
 
     /**

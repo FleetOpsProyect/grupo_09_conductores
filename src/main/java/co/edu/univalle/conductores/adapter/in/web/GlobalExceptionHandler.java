@@ -174,6 +174,21 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Invalid query parameters validated conditionally by the controller (such as valid_until in HU-07
+     * or page/size in HU-06): 400 INVALID_DATA with one entry per parameter.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-parameter detail
+     */
+    @ExceptionHandler(InvalidQueryParamsException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidQueryParams(InvalidQueryParamsException ex,
+            HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay parámetros inválidos", request,
+                ValidationErrorCodes.onePerField(ex.getErrors()));
+    }
+
+    /**
      * Parameter that cannot be converted to its type, such as page=abc or an unknown status: 400 INVALID_DATA.
      *
      * @param ex thrown exception
