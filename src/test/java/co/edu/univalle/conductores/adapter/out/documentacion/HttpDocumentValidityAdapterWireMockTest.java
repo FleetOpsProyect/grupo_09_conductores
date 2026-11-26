@@ -42,9 +42,12 @@ class HttpDocumentValidityAdapterWireMockTest {
     }
 
     private DocumentValidityPort adapterWithTimeout(long timeoutMs) {
-        return new DocumentacionClientConfig().documentValidityPort(
-                new DocumentacionProperties(wireMock.baseUrl(), timeoutMs),
-                new CorrelationIdClientInterceptor());
+        DocumentacionClientConfig config = new DocumentacionClientConfig();
+        DocumentacionProperties props = new DocumentacionProperties(wireMock.baseUrl(), timeoutMs, null);
+        return config.documentValidityPort(
+                props,
+                new CorrelationIdClientInterceptor(),
+                config.documentacionCircuitBreaker(props));
     }
 
     @Test
@@ -123,9 +126,12 @@ class HttpDocumentValidityAdapterWireMockTest {
 
     @Test
     void blankUrlThrowsDocumentationUnavailableException() {
-        DocumentValidityPort adapter = new DocumentacionClientConfig().documentValidityPort(
-                new DocumentacionProperties("", 2000),
-                new CorrelationIdClientInterceptor());
+        DocumentacionClientConfig config = new DocumentacionClientConfig();
+        DocumentacionProperties props = new DocumentacionProperties("", 2000, null);
+        DocumentValidityPort adapter = config.documentValidityPort(
+                props,
+                new CorrelationIdClientInterceptor(),
+                config.documentacionCircuitBreaker(props));
 
         assertThatThrownBy(() -> adapter.findDriversWithValidLicense(List.of(UUID.randomUUID()), VALID_UNTIL))
                 .isInstanceOf(DocumentationUnavailableException.class);

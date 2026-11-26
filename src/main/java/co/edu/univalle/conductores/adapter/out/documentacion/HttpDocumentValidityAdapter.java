@@ -4,6 +4,8 @@ import co.edu.univalle.conductores.application.port.out.DocumentValidityPort;
 import co.edu.univalle.conductores.domain.DocumentationUnavailableException;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
@@ -14,26 +16,40 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * Adaptador de salida HTTP hacia el servicio de Documentación (HU-07).
+ * Adaptador de salida HTTP hacia el servicio de Documentación protegido con Circuit Breaker
+ * Resilience4j (HU-07).
  */
 public class HttpDocumentValidityAdapter implements DocumentValidityPort {
 
     private final RestClient restClient;
     private final String baseUrl;
+    private final CircuitBreaker circuitBreaker;
 
     /**
-     * Crea el adaptador HTTP.
+     * Crea el adaptador HTTP protegido por un {@link CircuitBreaker}.
      *
-     * @param restClient cliente REST ya configurado con timeouts e interceptor de correlation_id
-     * @param baseUrl    URL base del servicio de Documentación (puede estar vacía si no se usa)
+     * @param restClient     cliente REST configurado con timeouts e interceptor de correlation_id
+     * @param baseUrl        URL base del servicio de Documentación (puede estar vacía si no se usa)
+     * @param circuitBreaker instancia de Resilience4j para proteger las llamadas salientes
      */
-    public HttpDocumentValidityAdapter(RestClient restClient, String baseUrl) {
+    public HttpDocumentValidityAdapter(
+            RestClient restClient, String baseUrl, CircuitBreaker circuitBreaker) {
         this.restClient = Objects.requireNonNull(restClient, "restClient");
         this.baseUrl = baseUrl;
+        this.circuitBreaker = Objects.requireNonNull(circuitBreaker, "circuitBreaker");
     }
 
     @Override
     public Set<UUID> findDriversWithValidLicense(List<UUID> driverIds, LocalDate validUntil) {
+        try {
+            return circuitBreaker.executeSupplier(() -> callDocumentacion(driverIds, validUntil));
+        } catch (CallNotPermittedException ex) {
+            throw new DocumentationUnavailableException(
+                    "Circuito abierto hacia el servicio de Documentación", ex);
+        }
+    }
+
+    private Set<UUID> callDocumentacion(List<UUID> driverIds, LocalDate validUntil) {
         if (baseUrl == null || baseUrl.isBlank()) {
             throw new DocumentationUnavailableException("DOCUMENTACION_URL no está configurada");
         }

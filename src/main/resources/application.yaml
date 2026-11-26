@@ -36,6 +36,9 @@ app:
   documentacion:
     url: ${DOCUMENTACION_URL:}
     timeout-ms: ${DOCUMENTACION_TIMEOUT_MS:2000}
+    circuit-breaker:
+      max-consecutive-failures: ${CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES:5}
+      wait-duration-ms: ${CIRCUIT_BREAKER_WAIT_DURATION_MS:30000}
   messaging:
     driver-events-topic-arn: "${FLEETOPS_DRIVER_TOPIC_ARN:arn:aws:sns:us-east-1:000000000000:fleetops_driver_events}"
     driver-queue: "${FLEETOPS_DRIVER_QUEUE_URL:fleetops_driver_queue}"
