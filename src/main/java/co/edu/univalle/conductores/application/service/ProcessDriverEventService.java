@@ -23,7 +23,8 @@ import java.util.function.Function;
  * <p>El tipo de evento se valida antes de tocar la base de datos, de modo que un tipo desconocido
  * siempre se rechaza como mensaje inválido. El cambio de estado, el registro en processed_events y, si
  * corresponde, el evento en outbox_events se guardan en la misma transacción. Un vencimiento de documento
- * que deja de tener ACTIVE al conductor guarda driver_blocked_event (HU-04).
+ * que deja de tener ACTIVE al conductor guarda driver_blocked_event (HU-04). Una renovación que quita el
+ * bloqueo por documentos guarda driver_activated_event si el conductor queda ACTIVE (HU-05).
  */
 public class ProcessDriverEventService implements ProcessDriverEvent {
 
