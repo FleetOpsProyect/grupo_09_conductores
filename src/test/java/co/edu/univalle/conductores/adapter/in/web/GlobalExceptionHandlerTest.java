@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
+import co.edu.univalle.conductores.domain.DocumentationUnavailableException;
 import co.edu.univalle.conductores.domain.DriverStatus;
 import co.edu.univalle.conductores.domain.FieldNotEditableException;
 import co.edu.univalle.conductores.domain.PersistenceUnavailableException;
@@ -241,6 +242,19 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody().code()).isEqualTo("STATUS_NOT_ALLOWED");
         assertThat(response.getBody().message()).isEqualTo("El conductor no está inhabilitado por incidente");
+        assertThat(response.getBody().errors()).isEmpty();
+    }
+
+    @Test
+    void documentationUnavailableReturns503DependencyUnavailable() {
+        DocumentationUnavailableException ex = new DocumentationUnavailableException("timeout", new RuntimeException());
+        ResponseEntity<ErrorResponse> response = handler.handleDocumentationUnavailable(ex, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody().code()).isEqualTo("DEPENDENCY_UNAVAILABLE");
+        assertThat(response.getBody().message())
+                .isEqualTo("No fue posible validar la vigencia de las licencias, intente nuevamente");
+        assertThat(response.getBody().path()).isEqualTo("/drivers");
         assertThat(response.getBody().errors()).isEmpty();
     }
 
