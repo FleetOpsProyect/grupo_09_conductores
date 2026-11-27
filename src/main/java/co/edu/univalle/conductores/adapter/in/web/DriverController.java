@@ -3,12 +3,15 @@ package co.edu.univalle.conductores.adapter.in.web;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverPageResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.DriverResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
+import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
 import co.edu.univalle.conductores.adapter.in.web.dto.GatewayErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.MedicalReleaseRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.RegisterDriverRequest;
 import co.edu.univalle.conductores.adapter.in.web.dto.UpdateDriverRequest;
+import co.edu.univalle.conductores.adapter.in.web.dto.ValidDriversResponse;
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
+import co.edu.univalle.conductores.application.port.in.ListValidDrivers;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
@@ -27,8 +30,13 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -61,6 +69,11 @@ public class DriverController {
     private static final Pattern UUID_PATTERN = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
+    /** Strict ISO calendar date format YYYY-MM-DD. */
+    private static final Pattern DATE_PATTERN = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
+
+    private static final ZoneId BOGOTA_ZONE = ZoneId.of("America/Bogota");
+
     /** Role rule of the routes that only FLEET_ADMIN can call through API Gateway. */
     static final String FLEET_ADMIN_ONLY = """
             **Roles:** por API Gateway solo el grupo FLEET_ADMIN (Administrador de Flota). Lo aplica \
@@ -81,25 +94,32 @@ public class DriverController {
     private final RegisterDriver registerDriver;
     private final GetDriver getDriver;
     private final ListDriver listDriver;
+    private final ListValidDrivers listValidDrivers;
     private final UpdateDriver updateDriver;
     private final ReleaseMedicalBlock releaseMedicalBlock;
+    private final Clock clock;
 
     /**
      * Crea el controlador con los puertos de entrada.
      *
-     * @param registerDriver caso de uso de registro
-     * @param getDriver caso de uso de consulta
-     * @param listDriver caso de uso de listado
-     * @param updateDriver caso de uso de actualización
+     * @param registerDriver      caso de uso de registro
+     * @param getDriver           caso de uso de consulta
+     * @param listDriver          caso de uso de listado paginado
+     * @param listValidDrivers    caso de uso de listado de conductores con licencia vigente
+     * @param updateDriver        caso de uso de actualización
      * @param releaseMedicalBlock caso de uso de alta médica
+     * @param clock               reloj inyectable para validar fechas en GMT-5
      */
     public DriverController(RegisterDriver registerDriver, GetDriver getDriver,
-            ListDriver listDriver, UpdateDriver updateDriver, ReleaseMedicalBlock releaseMedicalBlock) {
+            ListDriver listDriver, ListValidDrivers listValidDrivers, UpdateDriver updateDriver,
+            ReleaseMedicalBlock releaseMedicalBlock, Optional<Clock> clock) {
         this.registerDriver = registerDriver;
         this.getDriver = getDriver;
         this.listDriver = listDriver;
+        this.listValidDrivers = listValidDrivers;
         this.updateDriver = updateDriver;
         this.releaseMedicalBlock = releaseMedicalBlock;
+        this.clock = clock.orElseGet(() -> Clock.system(BOGOTA_ZONE));
     }
 
     /**
@@ -185,44 +205,159 @@ public class DriverController {
     }
 
     /**
-     * Lista conductores con filtro opcional por estado y paginación.
+     * Lista conductores con filtro opcional por estado y paginación (HU-06), o conductores con
+     * licencia vigente hasta {@code valid_until} (HU-07).
      *
-     * @param status estado a filtrar, opcional
-     * @param page número de página desde 0
-     * @param size tamaño de página, entre 1 y 100
-     * @return página de conductores
+     * <p>Orden de validación: primero {@code status} (binding del enum {@link DriverStatus}); si llega
+     * {@code valid_until}, se valida su formato ({@code AAAA-MM-DD} y fecha calendario válida) y que no
+     * sea anterior a hoy en GMT-5 ({@code America/Bogota}), ignorando {@code page} y {@code size}. Si
+     * {@code valid_until} no llega, se validan {@code page} y {@code size} con las reglas de HU-06.
+     *
+     * @param status     estado a filtrar, opcional
+     * @param validUntil fecha límite de vigencia de licencia ({@code AAAA-MM-DD}), opcional
+     * @param page       número de página desde 0 (ignorado si llega {@code valid_until})
+     * @param size       tamaño de página, entre 1 y 100 (ignorado si llega {@code valid_until})
+     * @return página de conductores (HU-06) o listado de conductores vigentes (HU-07)
      */
-    @Operation(summary = "Listar conductores por estado (HU-06)",
+    @Operation(summary = "Listar conductores por estado (HU-06) o con licencia vigente a una fecha (HU-07)",
         description = """
-            Lista los conductores ordenados de forma ascendente por created_at, con filtro \
-            opcional por status. total es el número de conductores que cumplen el filtro en \
-            todas las páginas. Si ninguno lo cumple, o page supera la última página, responde \
-            200 con content vacío, nunca 404.
+            Sin valid_until (HU-06): lista los conductores ordenados de forma ascendente por \
+            created_at, con filtro opcional por status y paginación. total es el número de \
+            conductores que cumplen el filtro en todas las páginas.
 
-            """ + FLEET_ADMIN_ONLY)
+            Con valid_until (HU-07): consulta al servicio de Documentación en lotes de hasta 100 \
+            conductores y devuelve los conductores elegibles (excluyendo MEDICAL_HOLD_INCIDENT y \
+            conductores sin licencia registrada) cuya licencia está vigente hasta esa fecha, \
+            ordenados por created_at sin paginar. page y size se ignoran sin validarse. \
+            content tiene un máximo de 500 elementos; total indica el total de conductores vigentes \
+            encontrados (aunque content se trunque en 500) y truncated indica si superó los 500.
+
+            **Orden de validación:** primero status (enum DriverStatus); luego valid_until (si \
+            llega); y solo si valid_until está ausente se validan page y size.
+
+            """ + FLEET_ADMIN_ONLY,
+        parameters = {
+            @Parameter(name = "status", in = ParameterIn.QUERY, required = false,
+                description = "Estado operativo opcional del conductor",
+                schema = @Schema(implementation = DriverStatus.class)),
+            @Parameter(name = "valid_until", in = ParameterIn.QUERY, required = false,
+                description = "Fecha límite de vigencia de licencia (AAAA-MM-DD, no anterior a hoy "
+                    + "en GMT-5). Si está presente, ignora page y size sin validarlos.",
+                schema = @Schema(type = "string", format = "date", example = "2026-12-31")),
+            @Parameter(name = "page", in = ParameterIn.QUERY, required = false,
+                description = "Número de página desde 0 (ignorado si llega valid_until)",
+                schema = @Schema(type = "integer", defaultValue = "0", minimum = "0")),
+            @Parameter(name = "size", in = ParameterIn.QUERY, required = false,
+                description = "Tamaño de página entre 1 y 100 (ignorado si llega valid_until)",
+                schema = @Schema(type = "integer", defaultValue = "20", minimum = "1", maximum = "100"))
+        })
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "Página de conductores"),
+        @ApiResponse(responseCode = "200",
+            description = "Página de conductores (HU-06) o listado de conductores vigentes (HU-07)",
+            content = {
+                @Content(mediaType = "application/json",
+                    schema = @Schema(oneOf = { DriverPageResponse.class, ValidDriversResponse.class }),
+                    examples = @ExampleObject(name = "HU07_VALID_DRIVERS",
+                        value = """
+                            {\
+                              "content": [],\
+                              "total": 0,\
+                              "truncated": false\
+                            }"""))
+            }),
         @ApiResponse(responseCode = "400",
             description = """
-                INVALID_DATA: status, page o size no cumplen su regla; errors trae un elemento \
-                por cada parámetro inválido.""",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
+                INVALID_DATA: status, page, size o valid_until no cumplen su regla; errors trae un \
+                elemento por cada parámetro inválido.""",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = {
+                    @ExampleObject(name = "INVALID_FORMAT",
+                        value = """
+                            {\
+                              "code": "INVALID_DATA",\
+                              "message": "Hay parámetros inválidos",\
+                              "timestamp": "2026-11-25T23:00:00-05:00",\
+                              "path": "/drivers",\
+                              "errors": [{"field": "valid_until", "code": "INVALID_FORMAT"}]\
+                            }"""),
+                    @ExampleObject(name = "VALUE_NOT_ALLOWED",
+                        value = """
+                            {\
+                              "code": "INVALID_DATA",\
+                              "message": "Hay parámetros inválidos",\
+                              "timestamp": "2026-11-25T23:00:00-05:00",\
+                              "path": "/drivers",\
+                              "errors": [{"field": "valid_until", "code": "VALUE_NOT_ALLOWED"}]\
+                            }""")
+                })),
         @ApiResponse(responseCode = "401", description = GATEWAY_401,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = GATEWAY_403_FLEET_ADMIN,
             content = @Content(schema = @Schema(implementation = GatewayErrorResponse.class))),
         @ApiResponse(responseCode = "503",
-            description = "SERVICE_UNAVAILABLE: la base de datos (Firestore) no responde",
-            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+            description = "SERVICE_UNAVAILABLE (Firestore) o DEPENDENCY_UNAVAILABLE (Documentación)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class),
+                examples = @ExampleObject(name = "DEPENDENCY_UNAVAILABLE",
+                    value = """
+                        {\
+                          "code": "DEPENDENCY_UNAVAILABLE",\
+                          "message": "No fue posible validar la vigencia de las licencias, intente nuevamente",\
+                          "timestamp": "2026-11-25T23:00:00-05:00",\
+                          "path": "/drivers",\
+                          "errors": []\
+                        }""")))
     })
     @GetMapping
-    public DriverPageResponse list(@RequestParam(required = false) DriverStatus status,
-            @RequestParam(defaultValue = "0") @Min(0) int page,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    public ResponseEntity<Object> list(@RequestParam(required = false) DriverStatus status,
+            @RequestParam(name = "valid_until", required = false) String validUntil,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        if (validUntil != null) {
+            LocalDate validUntilDate = parseValidUntil(validUntil);
+            ListValidDrivers.ValidDriversResult result = listValidDrivers.listValid(
+                    new ListValidDrivers.Query(status, validUntilDate));
+            return ResponseEntity.ok(new ValidDriversResponse(
+                    result.content().stream().map(DriverResponse::from).toList(),
+                    result.total(), result.truncated()));
+        }
+        validatePagination(page, size);
         PageResult<Driver> result = listDriver.list(new ListDriver.Query(status, page, size));
-        return new DriverPageResponse(
+        return ResponseEntity.ok(new DriverPageResponse(
                 result.content().stream().map(DriverResponse::from).toList(),
-                result.page(), result.size(), result.total());
+                result.page(), result.size(), result.total()));
+    }
+
+    private LocalDate parseValidUntil(String validUntil) {
+        if (!DATE_PATTERN.matcher(validUntil).matches()) {
+            throw new InvalidQueryParamsException(
+                    List.of(new FieldError("valid_until", ValidationErrorCodes.INVALID_FORMAT)));
+        }
+        LocalDate parsed;
+        try {
+            parsed = LocalDate.parse(validUntil);
+        } catch (DateTimeParseException ex) {
+            throw new InvalidQueryParamsException(
+                    List.of(new FieldError("valid_until", ValidationErrorCodes.INVALID_FORMAT)));
+        }
+        LocalDate today = LocalDate.now(clock.withZone(BOGOTA_ZONE));
+        if (parsed.isBefore(today)) {
+            throw new InvalidQueryParamsException(
+                    List.of(new FieldError("valid_until", ValidationErrorCodes.VALUE_NOT_ALLOWED)));
+        }
+        return parsed;
+    }
+
+    private static void validatePagination(int page, int size) {
+        List<FieldError> errors = new ArrayList<>();
+        if (page < 0) {
+            errors.add(new FieldError("page", ValidationErrorCodes.VALUE_NOT_ALLOWED));
+        }
+        if (size < 1 || size > 100) {
+            errors.add(new FieldError("size", ValidationErrorCodes.VALUE_NOT_ALLOWED));
+        }
+        if (!errors.isEmpty()) {
+            throw new InvalidQueryParamsException(errors);
+        }
     }
 
     /**

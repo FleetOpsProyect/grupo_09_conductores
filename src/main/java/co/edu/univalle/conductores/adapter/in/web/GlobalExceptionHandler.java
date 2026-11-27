@@ -2,6 +2,7 @@ package co.edu.univalle.conductores.adapter.in.web;
 
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse;
 import co.edu.univalle.conductores.adapter.in.web.dto.ErrorResponse.FieldError;
+import co.edu.univalle.conductores.domain.DocumentationUnavailableException;
 import co.edu.univalle.conductores.domain.DriverNotFoundException;
 import co.edu.univalle.conductores.domain.DuplicateDocumentException;
 import co.edu.univalle.conductores.domain.FieldNotEditableException;
@@ -173,6 +174,21 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Invalid query parameters validated conditionally by the controller (such as valid_until in HU-07
+     * or page/size in HU-06): 400 INVALID_DATA with one entry per parameter.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error with the per-parameter detail
+     */
+    @ExceptionHandler(InvalidQueryParamsException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidQueryParams(InvalidQueryParamsException ex,
+            HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST, INVALID_DATA, "Hay parámetros inválidos", request,
+                ValidationErrorCodes.onePerField(ex.getErrors()));
+    }
+
+    /**
      * Parameter that cannot be converted to its type, such as page=abc or an unknown status: 400 INVALID_DATA.
      *
      * @param ex thrown exception
@@ -286,6 +302,21 @@ public class GlobalExceptionHandler {
         log.error("Persistence unavailable on {} {}", request.getMethod(), request.getRequestURI(), ex);
         return build(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE",
                 "Servicio temporalmente no disponible, intente nuevamente", request, List.of());
+    }
+
+    /**
+     * Documentation service timeout, 5xx or open circuit: 503 DEPENDENCY_UNAVAILABLE with a fixed message.
+     *
+     * @param ex thrown exception
+     * @param request current request
+     * @return common error without exception details
+     */
+    @ExceptionHandler(DocumentationUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleDocumentationUnavailable(DocumentationUnavailableException ex,
+            HttpServletRequest request) {
+        log.error("Documentation service unavailable on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE",
+                "No fue posible validar la vigencia de las licencias, intente nuevamente", request, List.of());
     }
 
     /**

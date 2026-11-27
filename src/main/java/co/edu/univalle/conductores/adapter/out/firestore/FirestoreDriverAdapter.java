@@ -296,6 +296,23 @@ public class FirestoreDriverAdapter implements DriverRepository, OutboxRepositor
         return new PageResult<>(content, page, size, count.getCount());
     }
 
+    @Override
+    public List<Driver> findCandidates(DriverStatus status) {
+        if (status == DriverStatus.MEDICAL_HOLD_INCIDENT) {
+            return List.of();
+        }
+        Query query = drivers().orderBy("created_at")
+                .orderBy(FieldPath.documentId(), Query.Direction.ASCENDING);
+        if (status != null) {
+            query = query.whereEqualTo("status", status.name());
+        }
+        QuerySnapshot snapshot = await(query.get());
+        return snapshot.getDocuments().stream()
+                .map(document -> DriverDocument.toDomain(document.getData()))
+                .filter(driver -> driver.getStatus() != DriverStatus.MEDICAL_HOLD_INCIDENT)
+                .toList();
+    }
+
     private CollectionReference drivers() {
         return firestore.collection(DriverDocument.COLLECTION);
     }

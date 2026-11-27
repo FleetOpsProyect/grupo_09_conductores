@@ -2,11 +2,13 @@ package co.edu.univalle.conductores.config;
 
 import co.edu.univalle.conductores.application.port.in.GetDriver;
 import co.edu.univalle.conductores.application.port.in.ListDriver;
+import co.edu.univalle.conductores.application.port.in.ListValidDrivers;
 import co.edu.univalle.conductores.application.port.in.ProcessDriverEvent;
 import co.edu.univalle.conductores.application.port.in.RegisterDriver;
 import co.edu.univalle.conductores.application.port.in.ReleaseMedicalBlock;
 import co.edu.univalle.conductores.application.port.in.UpdateDriver;
 import co.edu.univalle.conductores.application.port.out.ConsumerMetricsPort;
+import co.edu.univalle.conductores.application.port.out.DocumentValidityPort;
 import co.edu.univalle.conductores.application.port.out.DriverRepository;
 import co.edu.univalle.conductores.application.port.out.EventMetricsPort;
 import co.edu.univalle.conductores.application.port.out.EventPublisherPort;
@@ -14,6 +16,7 @@ import co.edu.univalle.conductores.application.port.out.OutboxRepositoryPort;
 import co.edu.univalle.conductores.application.port.out.ProcessedEventRepositoryPort;
 import co.edu.univalle.conductores.application.service.GetDriverService;
 import co.edu.univalle.conductores.application.service.ListDriverService;
+import co.edu.univalle.conductores.application.service.ListValidDriversService;
 import co.edu.univalle.conductores.application.service.OutboxPublisher;
 import co.edu.univalle.conductores.application.service.ProcessDriverEventService;
 import co.edu.univalle.conductores.application.service.RegisterDriverService;
@@ -72,6 +75,19 @@ public class DriverServiceConfig {
     @Bean
     public ListDriver listDriver(DriverRepository repository) {
         return new ListDriverService(repository);
+    }
+
+    /**
+     * Caso de uso de listado de conductores con licencia vigente a una fecha (HU-07).
+     *
+     * @param repository           repositorio de conductores
+     * @param documentValidityPort puerto de consulta a Documentación
+     * @return implementación de ListValidDrivers
+     */
+    @Bean
+    public ListValidDrivers listValidDrivers(
+            DriverRepository repository, DocumentValidityPort documentValidityPort) {
+        return new ListValidDriversService(repository, documentValidityPort);
     }
 
     /**

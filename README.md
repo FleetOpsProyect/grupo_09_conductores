@@ -51,17 +51,16 @@ Toda la configuración llega por variables de entorno (DEV_04). La columna **Loc
 | `OUTBOX_PUBLISH_INTERVAL_MS` | Intervalo del publicador del outbox. | `2000` (2 s) | `2000` (2 s) | Implementada |
 | `OUTBOX_BATCH_SIZE` | Máximo de eventos pendientes por ciclo del publicador. | `50` | `50` | Implementada |
 | `OUTBOX_PUBLISHER_ENABLED` | Habilita el publicador periódico del outbox. | `true` | `true` | Implementada |
-| `DOCUMENTACION_URL` | URL del servicio de Documentación (G1). | pendiente: la entrega el equipo de Documentación | pendiente: la entrega el equipo de Documentación | Prevista (HU-07) |
-| `DOCUMENTACION_TIMEOUT_MS` | Timeout hacia Documentación. | `2000` (2 s) | `2000` (2 s) | Prevista (HU-07) |
-| `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES` | Fallos consecutivos para abrir el Circuit Breaker. | `5` | `5` | Prevista (HU-07) |
-| `CIRCUIT_BREAKER_WAIT_DURATION_MS` | Espera con el circuito abierto. | `30000` (30 s) | `30000` (30 s) | Prevista (HU-07) |
+| `DOCUMENTACION_URL` | URL del servicio de Documentación (G1). | pendiente: la entrega el equipo de Documentación | pendiente: la entrega el equipo de Documentación | Implementada (HU-07) |
+| `DOCUMENTACION_TIMEOUT_MS` | Timeout hacia Documentación. | `2000` (2 s) | `2000` (2 s) | Implementada (HU-07) |
+| `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES` | Fallos consecutivos para abrir el Circuit Breaker. | `5` | `5` | Implementada (HU-07) |
+| `CIRCUIT_BREAKER_WAIT_DURATION_MS` | Espera con el circuito abierto. | `30000` (30 s) | `30000` (30 s) | Implementada (HU-07) |
 | `JAVA_TOOL_OPTIONS` | Opciones JVM del contenedor. Viene fijada en el `Dockerfile`; solo se define para cambiarla. | `-XX:MaxRAMPercentage=75.0` (Dockerfile) | `-XX:MaxRAMPercentage=75.0` (Dockerfile) | Implementada |
 | `DOCKERHUB_USER` | Usuario de Docker Hub (secreto `DOCKERHUB_USERNAME` en CI/CD). | — | usuario de Docker Hub del equipo | Infra |
 | `IMAGE_NAME` | Nombre de la imagen Docker. | — | `ms-conductores` | Infra |
 | `IMAGE_TAG` | Etiqueta de la imagen. El CD publica el SHA del commit y `latest` (desde `main`), y en cada despliegue la reemplaza por el SHA. | — | `latest` | Infra |
 
-*Prevista (HU-07)*: el código todavía no la lee; la usará la integración con Documentación y su
-Circuit Breaker. *Infra*: la usa `docker-compose.prod.yml`, no la aplicación.
+*Infra*: la usa `docker-compose.prod.yml`, no la aplicación.
 
 En producción el JSON de Firebase se monta como volumen de solo lectura en
 `/secrets/firebase-adminsdk.json` (ver `docker-compose.prod.yml`).
@@ -177,6 +176,20 @@ curl -X POST http://localhost:8085/drivers \
     "phone": "3001234567"
   }'
 ```
+
+### Consulta de conductores con licencia vigente (HU-07)
+
+El endpoint `GET /drivers` admite el parámetro opcional `valid_until=AAAA-MM-DD` (por ejemplo, `GET /drivers?status=ACTIVE&valid_until=2026-12-31`) para listar conductores cuya licencia de conducción está vigente hasta esa fecha:
+
+- **Validación**: `valid_until` debe cumplir el formato calendario `AAAA-MM-DD` (`400 INVALID_DATA` con `INVALID_FORMAT`) y no ser anterior a la fecha actual en GMT-5 / `America/Bogota` (`400 INVALID_DATA` con `VALUE_NOT_ALLOWED`). Cuando `valid_until` está presente, `page` y `size` se ignoran sin validarse.
+- **Candidatos y lotes**: se consultan en Firestore los conductores que cumplen `status`, excluyendo siempre `MEDICAL_HOLD_INCIDENT`, y se envían en lotes de hasta **100** IDs a Documentación (`GET /documents/validity-check?owner_type=DRIVER&valid_until=...&owner_ids=...&size=100`) propagando `X-Correlation-Id`.
+- **Respuesta**: `{"content": [...], "total": n, "truncated": bool}` ordenada ascendentemente por `created_at` y sin paginar. `content` tiene un máximo de **500** elementos; `total` indica el total de conductores vigentes encontrados y `truncated` es `true` cuando supera los 500.
+- **Configuración de Documentación y Circuit Breaker (Resilience4j)**:
+  - `DOCUMENTACION_URL`: URL base del servicio de Documentación.
+  - `DOCUMENTACION_TIMEOUT_MS`: timeout HTTP hacia Documentación (por defecto `2000` ms).
+  - `CIRCUIT_BREAKER_MAX_CONSECUTIVE_FAILURES`: fallos consecutivos necesarios para abrir el circuito (por defecto `5`).
+  - `CIRCUIT_BREAKER_WAIT_DURATION_MS`: tiempo que permanece abierto antes de pasar a *half-open* (por defecto `30000` ms).
+- **Fallo de dependencia (`503 DEPENDENCY_UNAVAILABLE`)**: si Documentación tarda más del timeout, responde 5xx o el circuito está abierto en cualquier lote, toda la petición falla inmediatamente con `503 DEPENDENCY_UNAVAILABLE` (`"No fue posible validar la vigencia de las licencias, intente nuevamente"`), sin devolver listas parciales.
 
 Los endpoints de gestión usan la raíz del servicio (`/health`, `/metrics` e `/info`, no `/actuator/*`)
 y un puerto propio, `MANAGEMENT_PORT` (`18001`), separado del de la API (`8085`). Así el puerto de la API
