@@ -27,8 +27,9 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Valida el sobre estándar {@code {event_id, event_type, occurred_at, source, correlation_id, data}}
  * y los campos de {@code data} que exige cada tipo de evento: {@code document_expired_event} y
  * {@code document_renewed_event} traen {@code document_id, document_type, owner_type, owner_id}; solo el
- * primero exige {@code expiration_date}. Ambos afectan solo a conductores ({@code owner_type = DRIVER}),
- * y los demás tipos traen {@code driver_id}. Un mensaje inválido o con tipo
+ * primero exige {@code expiration_date}. Ambos afectan solo a conductores ({@code owner_type = DRIVER});
+ * {@code severe_incident_reported_event} trae {@code driver_id, incident_id} y los demás tipos traen
+ * {@code driver_id}. Un mensaje inválido o con tipo
  * desconocido va a la DLQ sin reintentos, con log ERROR. Si falla la persistencia, la excepción se relanza
  * para que SQS reintente; al tercer intento la redrive policy lo mueve a la DLQ.
  */
@@ -108,6 +109,11 @@ public class DriverEventListener {
                 log.info("Bloqueo por documentos quitado: owner_id={}, document_id={}",
                         command.driverId(), textOrUnknown(root.get("data"), "document_id"));
             }
+            if (result == EventProcessingResult.PROCESSED
+                    && ProcessDriverEvent.SEVERE_INCIDENT_REPORTED_EVENT.equals(eventType)) {
+                log.info("Retención médica aplicada por incidente grave: driver_id={}, incident_id={}",
+                        command.driverId(), textOrUnknown(root.get("data"), "incident_id"));
+            }
 
         } catch (DriverNotFoundException ex) {
             log.warn("Conductor no encontrado, el evento pasa a la DLQ: {}={}, event_id={}, event_type={}",
@@ -161,6 +167,9 @@ public class DriverEventListener {
             driverId = documentOwnerDriverId(data, true);
         } else if (ProcessDriverEvent.DOCUMENT_RENEWED_EVENT.equals(eventType)) {
             driverId = documentOwnerDriverId(data, false);
+        } else if (ProcessDriverEvent.SEVERE_INCIDENT_REPORTED_EVENT.equals(eventType)) {
+            driverId = requiredUuid(data, "driver_id");
+            requiredUuid(data, "incident_id");
         } else {
             driverId = requiredUuid(data, "driver_id");
         }

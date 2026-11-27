@@ -171,7 +171,7 @@ class ProcessDriverEventServiceTest {
     }
 
     @Test
-    void processesSevereIncidentReportedEventAndAppliesMedicalBlock() {
+    void incidentOnAnActiveDriverAppliesMedicalBlockAndReturnsBlockedEventForOutbox() {
         Driver driver = repository.add(activeDriver());
         OffsetDateTime incidentAt = NOW.plusHours(1);
 
@@ -181,8 +181,42 @@ class ProcessDriverEventServiceTest {
         assertThat(result).isEqualTo(EventProcessingResult.PROCESSED);
         assertThat(driver.isMedicalBlock()).isTrue();
         assertThat(driver.getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
-        assertThat(repository.outbox).isNull();
+        assertThat(repository.outbox).isNotNull();
+        assertThat(repository.outbox.status()).isEqualTo(OutboxEvent.Status.PENDING);
+        assertThat(repository.outbox.envelope().eventType()).isEqualTo(DriverEventType.DRIVER_BLOCKED.value());
+        assertThat(repository.outbox.envelope().correlationId()).isEqualTo(CORRELATION_ID);
+        assertThat(repository.outbox.envelope().data())
+                .isEqualTo(new DriverBlockedPayload(DRIVER_ID, driver.getFullName()));
         verify(consumerMetrics).recordConsumed(ProcessDriverEventService.SEVERE_INCIDENT_REPORTED_EVENT, "processed");
+    }
+
+    @Test
+    void incidentOnADriverAlreadyBlockedPreservesDocumentBlockAndReturnsNoEvent() {
+        Driver driver = repository.add(Driver.restore(DRIVER_ID, "1144056789", "Carlos Pérez", "carlos@correo.com",
+                null, true, false, NOW, NOW));
+
+        EventProcessingResult result = service.process(command(
+                ProcessDriverEventService.SEVERE_INCIDENT_REPORTED_EVENT, NOW.plusHours(1)));
+
+        assertThat(result).isEqualTo(EventProcessingResult.PROCESSED);
+        assertThat(driver.isDocumentBlock()).isTrue();
+        assertThat(driver.isMedicalBlock()).isTrue();
+        assertThat(driver.getStatus()).isEqualTo(DriverStatus.MEDICAL_HOLD_INCIDENT);
+        assertThat(repository.outbox).isNull();
+    }
+
+    @Test
+    void duplicateIncidentEventDoesNotApplyAnotherChangeOrCreateAnOutboxEvent() {
+        Driver driver = repository.add(activeDriver());
+        repository.processed.add(EVENT_ID);
+
+        EventProcessingResult result = service.process(command(
+                ProcessDriverEventService.SEVERE_INCIDENT_REPORTED_EVENT, NOW.plusHours(1)));
+
+        assertThat(result).isEqualTo(EventProcessingResult.DUPLICATE);
+        assertThat(driver.isMedicalBlock()).isFalse();
+        assertThat(repository.outbox).isNull();
+        verify(consumerMetrics).recordConsumed(ProcessDriverEventService.SEVERE_INCIDENT_REPORTED_EVENT, "duplicate");
     }
 
     @Test

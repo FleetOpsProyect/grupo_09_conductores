@@ -211,8 +211,9 @@ En `/metrics`, las métricas de eventos son:
 ### Publicador del outbox
 
 El registro de un conductor, el alta médica, la modificación de sus datos (`driver_updated_event`, solo si
-algún campo cambia) y el vencimiento de su licencia (`driver_blocked_event`, solo si estaba `ACTIVE`; lo
-guarda el consumidor junto con `processed_events`), y la renovación de su documento (`driver_activated_event`, solo si el conductor queda `ACTIVE`; también lo guarda el consumidor junto con `processed_events`) guardan el evento en `outbox_events` en la misma
+algún campo cambia), el vencimiento de su licencia y los incidentes graves (`driver_blocked_event`, solo si
+el conductor estaba `ACTIVE`; el consumidor lo guarda junto con `processed_events`), y la renovación de su
+documento (`driver_activated_event`, solo si el conductor queda `ACTIVE`; también lo guarda el consumidor junto con `processed_events`) guardan el evento en `outbox_events` en la misma
 transacción de Firestore, con estado `PENDING`, y responde sin esperar a SNS. Un proceso programado,
 cada `OUTBOX_PUBLISH_INTERVAL_MS` (2 s), lee hasta `OUTBOX_BATCH_SIZE` eventos `PENDING` en orden de
 `created_at`, los publica en `fleetops_driver_events` con el message attribute `event_type` y los marca
@@ -229,17 +230,17 @@ El consumidor escucha en la cola `fleetops_driver_queue` (conectada por suscripc
 de documentación e incidentes). Procesa:
 - `document_expired_event`: aplica bloqueo de documentos al conductor (`INACTIVE_EXPIRED_DOCUMENTS`).
 - `document_renewed_event`: retira el bloqueo de documentos; el conductor queda `ACTIVE` si no tiene bloqueo médico (si lo tiene, sigue en `MEDICAL_HOLD_INCIDENT`).
-- `severe_incident_reported_event`: aplica bloqueo médico (`MEDICAL_HOLD_INCIDENT`).
+- `severe_incident_reported_event`: aplica bloqueo médico (`MEDICAL_HOLD_INCIDENT`) sin quitar un bloqueo documental; si el conductor estaba `ACTIVE`, guarda `driver_blocked_event` en el outbox.
 
 Acepta el mensaje tal cual o envuelto en la notificación de SNS, y valida el sobre estándar:
 `event_id` y `correlation_id` (UUID), `event_type`, `source` y `occurred_at` (ISO 8601 con offset o `Z`).
 En `data`, `document_expired_event` debe traer `document_id`, `document_type`, `owner_type`, `owner_id`
-y `expiration_date`, y el conductor es `owner_id` (UUID). `document_renewed_event` debe traer `document_id`, `document_type`, `owner_type` y `owner_id` (sin `expiration_date`). Solo `severe_incident_reported_event` trae `driver_id` (UUID).
+y `expiration_date`, y el conductor es `owner_id` (UUID). `document_renewed_event` debe traer `document_id`, `document_type`, `owner_type` y `owner_id` (sin `expiration_date`). `severe_incident_reported_event` debe traer `driver_id` e `incident_id` (UUID).
 Los campos adicionales se ignoran.
 
 | Caso | Qué hace | Log | Métrica |
 | :--- | :--- | :--- | :--- |
-| Evento válido | Cambia el estado del conductor y confirma el mensaje. | INFO con `owner_id` y `document_id` en `document_expired_event`, y en `document_renewed_event` cuando se quita el bloqueo | `drivers_events_consumed_total{result="processed"}` |
+| Evento válido | Cambia el estado del conductor y confirma el mensaje. | INFO con `owner_id` y `document_id` en eventos de documentos; con `driver_id` e `incident_id` para incidente grave | `drivers_events_consumed_total{result="processed"}` |
 | `event_id` ya procesado | Confirma el mensaje sin cambios. | — | `drivers_events_consumed_total{result="duplicate"}` |
 | Documento que no es de un conductor (`owner_type` distinto de `DRIVER`) | Confirma el mensaje sin cambios, sin filtrar por `document_type`. | DEBUG | `drivers_events_consumed_total{result="ignored"}` |
 | JSON inválido, campo faltante o `event_type` desconocido | Lo envía a la DLQ sin reintentos, con los atributos `event_type` y `reason`. | ERROR con `event_id` y el motivo | `drivers_events_dlq_total{reason="invalid_message"}` |
