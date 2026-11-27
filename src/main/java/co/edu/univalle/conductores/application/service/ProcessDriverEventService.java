@@ -23,8 +23,8 @@ import java.util.function.Function;
  * <p>El tipo de evento se valida antes de tocar la base de datos, de modo que un tipo desconocido
  * siempre se rechaza como mensaje inválido. El cambio de estado, el registro en processed_events y, si
  * corresponde, el evento en outbox_events se guardan en la misma transacción. Un vencimiento de documento
- * que deja de tener ACTIVE al conductor guarda driver_blocked_event (HU-04). Una renovación que quita el
- * bloqueo por documentos guarda driver_activated_event si el conductor queda ACTIVE (HU-05).
+ * o un incidente grave que deja de tener ACTIVE al conductor guarda driver_blocked_event. Una renovación
+ * que quita el bloqueo por documentos guarda driver_activated_event si el conductor queda ACTIVE.
  */
 public class ProcessDriverEventService implements ProcessDriverEvent {
 
@@ -84,8 +84,9 @@ public class ProcessDriverEventService implements ProcessDriverEvent {
                 return reactivated ? activatedEvent(driver, command.correlationId()) : null;
             };
             case SEVERE_INCIDENT_REPORTED_EVENT -> driver -> {
+                boolean wasActive = driver.getStatus() == DriverStatus.ACTIVE;
                 driver.applyMedicalBlock(occurredAt);
-                return null;
+                return wasActive ? blockedEvent(driver, command.correlationId()) : null;
             };
             default -> throw new IllegalArgumentException("Tipo de evento no soportado: " + command.eventType());
         };

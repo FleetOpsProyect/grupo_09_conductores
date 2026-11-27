@@ -47,6 +47,7 @@ class DriverEventListenerTest {
     private static final String EXPIRED = "document_expired_event";
     private static final String RENEWED = "document_renewed_event";
     private static final String INCIDENT = "severe_incident_reported_event";
+    private static final UUID INCIDENT_ID = UUID.fromString("bbbbbbbb-1111-2222-3333-444444444444");
 
     private final JsonMapper jsonMapper = new JsonMapper();
 
@@ -153,6 +154,53 @@ class DriverEventListenerTest {
         verify(processDriverEvent).process(captor.capture());
         assertThat(captor.getValue().eventType()).isEqualTo(RENEWED);
         assertThat(captor.getValue().driverId()).isEqualTo(DRIVER_ID);
+    }
+
+    @Test
+    void processesIncidentWithDriverAndIncidentIdsAndLogsAtInfo() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+        ObjectNode envelope = driverIdEnvelope(INCIDENT);
+        assertThat(envelope.get("source").asString()).isEqualTo("incidents");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
+        verify(processDriverEvent).process(captor.capture());
+        assertThat(captor.getValue().driverId()).isEqualTo(DRIVER_ID);
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.INFO);
+            assertThat(event.getFormattedMessage())
+                    .contains("driver_id=" + DRIVER_ID)
+                    .contains("incident_id=" + INCIDENT_ID);
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"driver_id", "incident_id"})
+    void incidentMissingRequiredIdGoesToDlq(String field) {
+        ObjectNode envelope = driverIdEnvelope(INCIDENT);
+        ((ObjectNode) envelope.get("data")).remove(field);
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(dlqSender).sendToDlq(envelope.toString(), INCIDENT, "invalid_message");
+        verify(processDriverEvent, never()).process(any());
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).contains("Falta el campo obligatorio " + field);
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"driver_id", "incident_id"})
+    void incidentWithMalformedIdGoesToDlq(String field) {
+        ObjectNode envelope = driverIdEnvelope(INCIDENT);
+        ((ObjectNode) envelope.get("data")).put(field, "not-a-uuid");
+
+        listener.onMessage(envelope.toString(), "1");
+
+        verify(dlqSender).sendToDlq(envelope.toString(), INCIDENT, "invalid_message");
+        verify(processDriverEvent, never()).process(any());
     }
 
     @ParameterizedTest
@@ -489,8 +537,8 @@ class DriverEventListenerTest {
     }
 
     @Test
-    void writesTheBlockInfoLogOnlyForDocumentExpiredEvents() {
-        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.PROCESSED);
+    void doesNotLogIncidentWhenEventIsDuplicate() {
+        when(processDriverEvent.process(any())).thenReturn(EventProcessingResult.DUPLICATE);
 
         listener.onMessage(driverIdEnvelope(INCIDENT).toString(), "1");
 
@@ -560,7 +608,10 @@ class DriverEventListenerTest {
     /** A valid event whose data carries driver_id (severe_incident_reported_event). */
     private ObjectNode driverIdEnvelope(String eventType) {
         ObjectNode envelope = envelopeWithoutData(eventType);
-        envelope.putObject("data").put("driver_id", DRIVER_ID.toString());
+        ObjectNode data = envelope.putObject("data").put("driver_id", DRIVER_ID.toString());
+        if (INCIDENT.equals(eventType)) {
+            data.put("incident_id", INCIDENT_ID.toString());
+        }
         return envelope;
     }
 
@@ -569,7 +620,7 @@ class DriverEventListenerTest {
         envelope.put("event_id", EVENT_ID.toString());
         envelope.put("event_type", eventType);
         envelope.put("occurred_at", OCCURRED_AT);
-        envelope.put("source", "documents");
+        envelope.put("source", INCIDENT.equals(eventType) ? "incidents" : "documents");
         envelope.put("correlation_id", CORRELATION_ID.toString());
         return envelope;
     }

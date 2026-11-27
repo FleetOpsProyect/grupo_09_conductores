@@ -68,6 +68,7 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
     private static final String RENEWED = "document_renewed_event";
     private static final String SEVERE_INCIDENT = "severe_incident_reported_event";
     private static final String ACTIVATED = "driver_activated_event";
+    private static final String BLOCKED = "driver_blocked_event";
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
 
     @SuppressWarnings("resource")
@@ -148,6 +149,44 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
             assertThat(event.get("source").asString()).isEqualTo("driver");
             assertThat(event.get("data").get("driver_id").asString()).isEqualTo(driverId.toString());
         });
+    }
+
+    @Test
+    void severeIncidentBlocksAnActiveDriverAndStoresDriverBlockedEvent() throws Exception {
+        UUID driverId = newDriver();
+        UUID eventId = UUID.randomUUID();
+        UUID correlationId = UUID.randomUUID();
+        String payload = incidentEnvelope(eventId, correlationId, driverId);
+
+        send(payload);
+
+        await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.MEDICAL_HOLD_INCIDENT);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        assertThat(documentBlockOf(driverId)).isFalse();
+        double duplicatesBefore = consumed(SEVERE_INCIDENT, "duplicate");
+        send(payload);
+        await().atMost(TIMEOUT).until(() -> consumed(SEVERE_INCIDENT, "duplicate") == duplicatesBefore + 1);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        assertThat(eventsOf(BLOCKED, driverId, correlationId)).singleElement().satisfies(event -> {
+            assertThat(event.get("source").asString()).isEqualTo("driver");
+            assertThat(event.get("data").get("driver_id").asString()).isEqualTo(driverId.toString());
+        });
+        assertThat(dlqMessageContaining(eventId.toString())).isEmpty();
+    }
+
+    @Test
+    void severeIncidentOnDocumentBlockedDriverPreservesDocumentBlockAndStoresNoAdditionalEvent() throws Exception {
+        UUID driverId = newDriver();
+        send(expiredEnvelope(UUID.randomUUID(), UUID.randomUUID(), "DRIVER", driverId.toString()));
+        await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.INACTIVE_EXPIRED_DOCUMENTS);
+        int blockedEventsBefore = blockedEventsOf(driverId).size();
+
+        send(incidentEnvelope(UUID.randomUUID(), UUID.randomUUID(), driverId));
+
+        await().atMost(TIMEOUT).until(() -> statusOf(driverId) == DriverStatus.MEDICAL_HOLD_INCIDENT);
+        await().atMost(TIMEOUT).until(() -> messagesLeftInQueue() == 0);
+        assertThat(documentBlockOf(driverId)).isTrue();
+        assertThat(blockedEventsOf(driverId)).hasSize(blockedEventsBefore);
     }
 
     @Test
@@ -340,12 +379,23 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         return envelope.toString();
     }
 
+    private String incidentEnvelope(UUID eventId, UUID correlationId, UUID driverId) {
+        ObjectNode envelope = envelopeWithoutData(eventId, SEVERE_INCIDENT, correlationId);
+        envelope.putObject("data")
+                .put("driver_id", driverId.toString())
+                .put("incident_id", UUID.randomUUID().toString());
+        return envelope.toString();
+    }
+
     private String envelope(UUID eventId, String eventType, UUID driverId) {
         if (EXPIRED.equals(eventType)) {
             return expiredEnvelope(eventId, UUID.randomUUID(), "DRIVER", driverId.toString());
         }
         if (RENEWED.equals(eventType)) {
             return renewedEnvelope(eventId, UUID.randomUUID(), driverId.toString());
+        }
+        if (SEVERE_INCIDENT.equals(eventType)) {
+            return incidentEnvelope(eventId, UUID.randomUUID(), driverId);
         }
         ObjectNode envelope = envelopeWithoutData(eventId, eventType, UUID.randomUUID());
         envelope.putObject("data").put("driver_id", driverId.toString());
@@ -357,7 +407,7 @@ class DriverEventListenerLocalStackIntegrationTest extends BaseIntegrationTest {
         envelope.put("event_id", eventId.toString());
         envelope.put("event_type", eventType);
         envelope.put("occurred_at", "2026-11-15T10:00:00-05:00");
-        envelope.put("source", "documents");
+        envelope.put("source", SEVERE_INCIDENT.equals(eventType) ? "incidents" : "documents");
         envelope.put("correlation_id", correlationId.toString());
         return envelope;
     }
